@@ -1,0 +1,30 @@
+{
+  "name": "bde-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --watch --env-file=.env src/server.js",
+    "migrate": "node --env-file=.env scripts/migrate.js",
+    "migrate:apply": "node --env-file=.env scripts/migrate.js apply",
+    "create-user": "node --env-file=.env scripts/create-user.js",
+    "bootstrap-admin": "node --env-file=.env scripts/bootstrap-admin.js",
+    "chat:schema": "node --env-file=.env scripts/chat-schema.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "smoke": "node scripts/smoke-test.js",
+    "test:db": "node --env-file=.env --test \"tests-integration/**/*.test.js\"",
+    "verify:exports": "node scripts/verify-exports.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "mysql2": "^3.11.5",
+    "pdfkit": "^0.15.2"
+  }
+}

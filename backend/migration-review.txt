@@ -1,0 +1,398 @@
+﻿
+========== 001_users_sessions.sql ==========
+-- Requires MySQL 8.0+ (InnoDB, utf8mb4). All timestamps are stored in UTC.
+
+CREATE TABLE users (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  employee_id   VARCHAR(32)  NOT NULL,
+  name          VARCHAR(120) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role          ENUM('bde','admin') NOT NULL,
+  is_active     TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at    DATETIME     NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_users_employee_id (employee_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Login sessions. Only a SHA-256 hash of the token is stored.
+CREATE TABLE sessions (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  token_hash  CHAR(64)     NOT NULL,
+  expires_at  DATETIME     NOT NULL,
+  created_at  DATETIME     NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_sessions_token_hash (token_hash),
+  KEY idx_sessions_user (user_id),
+  CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 002_daily_reports.sql ==========
+-- Daily Calling Report (fields from the project brief).
+-- ASSUMPTION (needs TL confirmation): one report per BDE per date -> unique key below.
+-- No rule requires the category counts to add up to total_calls.
+CREATE TABLE daily_reports (
+  id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id            BIGINT UNSIGNED NOT NULL,
+  report_date        DATE NOT NULL,
+  total_calls        INT UNSIGNED NOT NULL,
+  interested         INT UNSIGNED NOT NULL,
+  not_interested     INT UNSIGNED NOT NULL,
+  follow_up_required INT UNSIGNED NOT NULL,
+  no_response        INT UNSIGNED NOT NULL,
+  created_at         DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_daily_reports_user_date (user_id, report_date),
+  CONSTRAINT fk_daily_reports_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 003_lead_statuses_leads.sql ==========
+-- Lead management. Requires MySQL 8.0+. Timestamps are UTC.
+
+-- Lead statuses are DATA, not code: the PDF does not list them. The proposed starter list is in
+-- migration 004 and can be changed with plain SQL once the TL confirms the real list.
+-- closes_follow_up = 1 means leads in that status are not counted as overdue/upcoming follow-ups.
+CREATE TABLE lead_statuses (
+  id               SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name             VARCHAR(60) NOT NULL,
+  sort_order       SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  closes_follow_up TINYINT(1) NOT NULL DEFAULT 0,
+  is_active        TINYINT(1) NOT NULL DEFAULT 1,
+  created_at       DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_lead_statuses_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE leads (
+  id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id              BIGINT UNSIGNED NOT NULL,        -- the responsible BDE (owner)
+  candidate_name       VARCHAR(120) NOT NULL,
+  phone                VARCHAR(20)  NULL,
+  phone_key            VARCHAR(15)  NULL,               -- digits only (last 10 if >= 10); used only to flag possible duplicates
+  email                VARCHAR(254) NULL,
+  email_key            VARCHAR(254) NULL,               -- lower-case email; used only to flag possible duplicates
+  course_or_internship VARCHAR(150) NOT NULL,           -- free text until TL decides on a fixed list
+  lead_status_id       SMALLINT UNSIGNED NOT NULL,
+  follow_up_date       DATE NULL,
+  next_action          VARCHAR(500) NULL,
+  created_at           DATETIME NOT NULL,
+  updated_at           DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_leads_user_followup (user_id, follow_up_date),
+  KEY idx_leads_followup (follow_up_date),
+  KEY idx_leads_status (lead_status_id),
+  KEY idx_leads_phone_key (phone_key),
+  KEY idx_leads_email_key (email_key),
+  CONSTRAINT fk_leads_user   FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_leads_status FOREIGN KEY (lead_status_id) REFERENCES lead_statuses (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- No UNIQUE key on phone/email on purpose: possible duplicates are warned about and need an explicit
+-- confirmation, they are never blocked or merged automatically.
+
+========== 004_seed_proposed_lead_statuses.sql ==========
+-- PROPOSED lead statuses: NOT confirmed by the TL. The project PDF does not define lead statuses.
+-- They mirror the Daily Calling Report categories in the PDF (Interested / Not interested /
+-- Follow-up required / No response or not reachable) plus "New".
+-- After the TL confirms the real list, change it with SQL (rename, add, set is_active = 0).
+-- Do not delete a status that leads already use (foreign key).
+INSERT INTO lead_statuses (name, sort_order, closes_follow_up, is_active, created_at) VALUES
+  ('New',                         10, 0, 1, UTC_TIMESTAMP()),
+  ('Interested',                  20, 0, 1, UTC_TIMESTAMP()),
+  ('Follow-up Required',          30, 0, 1, UTC_TIMESTAMP()),
+  ('No Response / Not Reachable', 40, 0, 1, UTC_TIMESTAMP()),
+  ('Not Interested',              50, 1, 1, UTC_TIMESTAMP());
+
+========== 005_leads_id_user_unique_key.sql ==========
+-- Phase 5 prerequisite. Adds a UNIQUE key on (id, user_id) of leads so that interviews can reference BOTH the lead
+-- and its owning BDE with one composite foreign key (see 006). Since id is already unique this never rejects data.
+-- Kept in its own file with a single statement: MySQL DDL is not transactional, so a one-statement migration cannot
+-- be left half-applied. Migration 003 is not edited.
+ALTER TABLE leads ADD UNIQUE KEY uq_leads_id_user (id, user_id);
+
+========== 006_interviews.sql ==========
+-- Interview tracking. Requires MySQL 8.0+. created_at / updated_at are UTC.
+-- scheduled_at is the WALL-CLOCK date and time exactly as the BDE entered it (no timezone conversion).
+--   ASSUMPTION (TL to confirm): one company timezone, so no conversion is needed.
+-- The composite foreign key makes the database itself guarantee that interviews.user_id (the responsible BDE)
+-- is the owner of the lead the interview belongs to.
+-- ASSUMPTION (TL to confirm): a lead may have several interviews (e.g. a reschedule); there is no unique key on lead_id.
+-- attendance / outcome values come from the PDF (Attended / Did not attend; Selected). "Pending" and "Not Selected" are
+-- the neutral/negative counterparts requested for Phase 5.
+-- interested_in_joining: NULL = not recorded yet, 1 = yes, 0 = no.
+-- payment_confirmed: only a yes/no flag ("candidates who confirmed payment"). Amounts, dates, instalments and receipts
+-- belong to the Payments module and are NOT stored here.
+CREATE TABLE interviews (
+  id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  lead_id              BIGINT UNSIGNED NOT NULL,
+  user_id              BIGINT UNSIGNED NOT NULL,   -- responsible BDE; always equals the lead's owner (composite FK)
+  scheduled_at         DATETIME NOT NULL,
+  attendance           ENUM('pending','attended','did_not_attend') NOT NULL DEFAULT 'pending',
+  outcome              ENUM('pending','selected','not_selected')   NOT NULL DEFAULT 'pending',
+  interested_in_joining TINYINT(1) NULL,
+  payment_confirmed    TINYINT(1) NOT NULL DEFAULT 0,
+  created_at           DATETIME NOT NULL,
+  updated_at           DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_interviews_lead (lead_id, user_id),
+  KEY idx_interviews_user_scheduled (user_id, scheduled_at),
+  KEY idx_interviews_scheduled (scheduled_at),
+  CONSTRAINT fk_interviews_lead_owner FOREIGN KEY (lead_id, user_id) REFERENCES leads (id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 007_payments.sql ==========
+-- Payment records (Phase 6). One row = one payment COMMITMENT for a lead and course/internship.
+-- Money actually received is stored separately in payment_instalments (008); the status (Pending / Partially Paid /
+-- Paid) is DERIVED from the two and is never stored, so it can never contradict the amounts.
+-- Requires MySQL 8.0.16+ (CHECK constraints are enforced). Timestamps are UTC.
+-- Amounts: DECIMAL(12,2), exact (no floating point). The PDF names no currency: ASSUMPTION (TL to confirm) a single currency.
+-- commitment_date: the date the candidate committed to pay. ASSUMPTION (TL to confirm): needed to place commitments in
+-- daily / weekly / monthly reports; the PDF does not define it.
+-- The composite foreign key makes the database itself guarantee that payments.user_id (the responsible BDE) is the owner
+-- of the lead (uses the unique key added in 005). A lead may have several payment records (e.g. two courses).
+CREATE TABLE payments (
+  id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  lead_id              BIGINT UNSIGNED NOT NULL,
+  user_id              BIGINT UNSIGNED NOT NULL,   -- responsible BDE; always equals the lead's owner (composite FK)
+  course_or_internship VARCHAR(150) NOT NULL,
+  amount_committed     DECIMAL(12,2) NOT NULL,
+  commitment_date      DATE NOT NULL,
+  created_at           DATETIME NOT NULL,
+  updated_at           DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_payments_id_user (id, user_id),
+  KEY idx_payments_lead (lead_id, user_id),
+  KEY idx_payments_user_date (user_id, commitment_date),
+  KEY idx_payments_date (commitment_date),
+  CONSTRAINT fk_payments_lead_owner FOREIGN KEY (lead_id, user_id) REFERENCES leads (id, user_id),
+  CONSTRAINT chk_payments_amount_positive CHECK (amount_committed > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 007_users_phone.sql ==========
+-- Module 1 (Profile): optional contact phone number on a user. Requires MySQL 8.0+.
+-- ADDITIVE and NULLABLE: existing rows and existing code are unaffected (old code simply ignores the column).
+-- The profile API (GET/PATCH /api/profile) needs this column, so run `npm run migrate` BEFORE starting the new code.
+-- Kept in its own file with a single statement: MySQL DDL is not transactional, so it cannot be left half-applied.
+-- Recovery if ever needed: ALTER TABLE users DROP COLUMN phone;  (this discards the stored phone numbers only)
+ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL;
+
+========== 008_payment_instalments.sql ==========
+-- Money actually received against a payment commitment (full payment = one instalment; partial payments = several).
+-- Revenue is the SUM of these rows, each counted exactly once. The application keeps SUM(amount) <= amount_committed
+-- (checked inside a transaction with a row lock on the payment); the database guarantees the owner is consistent.
+CREATE TABLE payment_instalments (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  payment_id BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,   -- always equals the payment's BDE (composite FK)
+  amount     DECIMAL(12,2) NOT NULL,
+  paid_on    DATE NOT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_instalments_id_user (id, user_id),
+  KEY idx_instalments_payment (payment_id, user_id),
+  KEY idx_instalments_user_paid (user_id, paid_on),
+  KEY idx_instalments_paid (paid_on),
+  CONSTRAINT fk_instalments_payment_owner FOREIGN KEY (payment_id, user_id) REFERENCES payments (id, user_id),
+  CONSTRAINT chk_instalments_amount_positive CHECK (amount > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 008_users_email.sql ==========
+-- Module 1 (Profile): optional contact email on a user. Requires MySQL 8.0+.
+-- ADDITIVE and NULLABLE: existing rows and existing code are unaffected (old code simply ignores the column).
+-- Length 254 matches leads.email. No UNIQUE key: two colleagues may legitimately share a team mailbox.
+-- Must be applied together with 007 before the profile API is used. Single statement, same reason as 007.
+-- Recovery if ever needed: ALTER TABLE users DROP COLUMN email;  (this discards the stored emails only)
+ALTER TABLE users ADD COLUMN email VARCHAR(254) NULL;
+
+========== 009_payment_receipts.sql ==========
+-- Metadata of uploaded payment proof (receipt or screenshot). The FILE itself is NOT in the database: it is stored on disk
+-- under RECEIPT_STORAGE_DIR (outside any web-served folder) with the random name in stored_name, and is only reachable
+-- through authenticated API endpoints. stored_name is generated by the server and never contains user input.
+-- sha256 lets the application warn when the same file is attached twice (possible double-counting).
+CREATE TABLE payment_receipts (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  instalment_id BIGINT UNSIGNED NOT NULL,
+  user_id       BIGINT UNSIGNED NOT NULL,   -- always equals the instalment's BDE (composite FK)
+  original_name VARCHAR(255) NOT NULL,      -- display only (sanitised); never used as a path
+  stored_name   VARCHAR(64)  NOT NULL,
+  mime_type     VARCHAR(50)  NOT NULL,      -- detected from the file's first bytes, not from the client's header
+  size_bytes    INT UNSIGNED NOT NULL,
+  sha256        CHAR(64)     NOT NULL,
+  uploaded_at   DATETIME     NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_receipts_stored_name (stored_name),
+  KEY idx_receipts_instalment (instalment_id, user_id),
+  KEY idx_receipts_sha256 (sha256),
+  CONSTRAINT fk_receipts_instalment_owner FOREIGN KEY (instalment_id, user_id) REFERENCES payment_instalments (id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 010_deprecate_interview_payment_flag.sql ==========
+-- Phase 6: interviews.payment_confirmed (created in 006) is no longer read or written by the application. The value shown
+-- as "payment confirmed" is now DERIVED from payment records (see lib/payment-confirmed-sql.js). The column is kept, not
+-- dropped, so no data is lost and the change can be reviewed or rolled back; drop it only after the TL confirms the rule.
+-- Metadata-only change (comment); 006 is not edited and no values are modified.
+ALTER TABLE interviews MODIFY payment_confirmed TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'DEPRECATED since Phase 6: legacy manual flag, ignored. Derived from payments instead.';
+
+========== 011_lead_import_batches.sql ==========
+-- Admin Excel/CSV import: one row per uploaded file. Requires MySQL 8.0+. Timestamps are UTC.
+-- The uploaded cell values (raw_rows_json) can contain personal data of students, so they are kept ONLY while the batch is in
+-- 'preview'. Committing or cancelling a batch sets raw_rows_json to NULL and deletes its staging rows (see 012).
+-- Kept in its own file with a single statement (MySQL DDL is not transactional).
+CREATE TABLE lead_import_batches (
+  id                          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  admin_user_id               BIGINT UNSIGNED NOT NULL,
+  file_name                   VARCHAR(255) NOT NULL,
+  file_format                 VARCHAR(8)   NOT NULL,
+  status                      ENUM('preview','committed','cancelled') NOT NULL DEFAULT 'preview',
+  headers_json                TEXT         NOT NULL,
+  raw_rows_json               LONGTEXT     NULL,
+  mapping_json                TEXT         NOT NULL,
+  default_bde_id              BIGINT UNSIGNED NULL,
+  default_course              VARCHAR(150) NULL,
+  include_existing_duplicates TINYINT(1)   NOT NULL DEFAULT 0,
+  total_rows                  INT UNSIGNED NOT NULL DEFAULT 0,
+  valid_rows                  INT UNSIGNED NOT NULL DEFAULT 0,
+  invalid_rows                INT UNSIGNED NOT NULL DEFAULT 0,
+  duplicate_in_file_rows      INT UNSIGNED NOT NULL DEFAULT 0,
+  duplicate_existing_rows     INT UNSIGNED NOT NULL DEFAULT 0,
+  inserted_rows               INT UNSIGNED NULL,
+  skipped_rows                INT UNSIGNED NULL,
+  created_at                  DATETIME NOT NULL,
+  updated_at                  DATETIME NOT NULL,
+  committed_at                DATETIME NULL,
+  PRIMARY KEY (id),
+  KEY idx_import_batches_created (created_at),
+  CONSTRAINT fk_import_batches_admin FOREIGN KEY (admin_user_id) REFERENCES users (id),
+  CONSTRAINT fk_import_batches_bde   FOREIGN KEY (default_bde_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 012_lead_import_rows.sql ==========
+-- Staging rows of an import batch (one per data row of the file). Deleted when the batch is committed or cancelled.
+-- row_number is the spreadsheet row (header = row 1, first data row = 2).
+CREATE TABLE lead_import_rows (
+  batch_id          BIGINT UNSIGNED NOT NULL,
+  `row_number`      INT UNSIGNED NOT NULL,
+  row_status        ENUM('valid','invalid','duplicate_in_file','duplicate_existing') NOT NULL,
+  bde_user_id       BIGINT UNSIGNED NULL,
+  lead_json         TEXT NULL,
+  errors_json       TEXT NULL,
+  duplicate_of_row  INT UNSIGNED NULL,
+  existing_lead_ids VARCHAR(200) NULL,
+  PRIMARY KEY (batch_id, `row_number`),
+  KEY idx_import_rows_status (batch_id, row_status),
+  CONSTRAINT fk_import_rows_batch FOREIGN KEY (batch_id) REFERENCES lead_import_batches (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 013_monthly_targets.sql ==========
+-- Monthly targets set by an admin, one row per BDE per month. NULL = no target for that measure. Requires MySQL 8.0+.
+-- month_start is always the first day of the month. Single statement (MySQL DDL is not transactional).
+CREATE TABLE monthly_targets (
+  user_id           BIGINT UNSIGNED NOT NULL,
+  month_start       DATE NOT NULL,
+  target_calls      INT UNSIGNED NULL,
+  target_interested INT UNSIGNED NULL,
+  target_interviews INT UNSIGNED NULL,
+  target_revenue    DECIMAL(12,2) NULL,
+  set_by            BIGINT UNSIGNED NOT NULL,
+  created_at        DATETIME NOT NULL,
+  updated_at        DATETIME NOT NULL,
+  PRIMARY KEY (user_id, month_start),
+  CONSTRAINT fk_monthly_targets_user   FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_monthly_targets_setter FOREIGN KEY (set_by)  REFERENCES users (id),
+  CONSTRAINT chk_monthly_targets_revenue CHECK (target_revenue IS NULL OR target_revenue > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 014_receipt_review.sql ==========
+-- Admin review of payment proofs (receipts / screenshots). Existing receipts become 'pending'. Requires MySQL 8.0+.
+-- review_status: pending (not looked at yet) | approved | rejected. A rejection must carry a note (enforced by the API; the note is
+-- shown to the BDE). reviewed_by / reviewed_at record who decided and when (the latest decision; a decision may be changed).
+-- Single ALTER statement (MySQL DDL is not transactional).
+ALTER TABLE payment_receipts
+  ADD COLUMN review_status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  ADD COLUMN reviewed_by   BIGINT UNSIGNED NULL,
+  ADD COLUMN reviewed_at   DATETIME NULL,
+  ADD COLUMN review_note   VARCHAR(300) NULL,
+  ADD KEY idx_receipts_review (review_status),
+  ADD CONSTRAINT fk_receipts_reviewer FOREIGN KEY (reviewed_by) REFERENCES users (id);
+
+========== 015_call_logs.sql ==========
+-- Call log: one row per call attempt a BDE records with the one-click outcome buttons ("Call desk"). Additive: a new table only;
+-- no existing table is altered, and the manual Daily Calling Report (daily_reports) keeps working as a fallback.
+-- Requires MySQL 8.0+. Apply with: npm run migrate
+--
+-- Every row is ONE call. Calling the same lead twice produces two rows, and both count as calls (see docs/call-log-assumptions.md).
+-- outcome mirrors the four categories of the Daily Calling Report in the project PDF.
+-- call_date is the BDE's working date (server clock + REPORT_UTC_OFFSET_MINUTES, fixed when the row is written); called_at is UTC.
+-- client_request_id is a random id the browser creates for each click. The unique key (user_id, client_request_id) makes a repeated
+-- delivery of the same click (double-click, retry after a dropped connection) a no-op instead of a second call.
+-- voided_at: a BDE can undo a mistaken click on the same day. The row is kept (audit trail) but excluded from every count.
+-- The composite foreign key makes the database itself guarantee that user_id is the owner of the lead (same pattern as interviews, 006).
+CREATE TABLE call_logs (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id           BIGINT UNSIGNED NOT NULL,
+  lead_id           BIGINT UNSIGNED NOT NULL,
+  outcome           ENUM('interested','not_interested','follow_up','no_response') NOT NULL,
+  call_date         DATE NOT NULL,
+  called_at         DATETIME NOT NULL,
+  client_request_id CHAR(36) NOT NULL,
+  voided_at         DATETIME NULL,
+  created_at        DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_call_logs_request (user_id, client_request_id),
+  KEY idx_call_logs_user_date (user_id, call_date),
+  KEY idx_call_logs_date (call_date),
+  KEY idx_call_logs_lead (lead_id),
+  CONSTRAINT fk_call_logs_user FOREIGN KEY (user_id) REFERENCES users (id),
+  CONSTRAINT fk_call_logs_lead_owner FOREIGN KEY (lead_id, user_id) REFERENCES leads (id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 016_chat_messages.sql ==========
+-- Team chat, part 1 of 3: the messages. ONE shared conversation for the whole team (no rooms, no direct messages).
+-- Requires MySQL 8.0+. Apply with: npm run migrate. Additive: a new table only; no existing table is altered.
+--
+-- kind: 'message' (anyone) or 'announcement' (admins only; enforced by the service, not by this column).
+-- body: plain text, stored exactly as typed (after trimming). It is NEVER treated as HTML: it is escaped when displayed.
+-- client_request_id: random id the browser makes for each send. The unique key (sender_id, client_request_id) turns a repeated delivery
+--   of the same send (double-click, retry after a dropped connection) into a no-op instead of a duplicate message.
+-- sender_id always comes from the logged-in session on the server, never from the request.
+-- Messages are never edited or deleted by the application (there is no such feature yet).
+CREATE TABLE chat_messages (
+  id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  sender_id         BIGINT UNSIGNED NOT NULL,
+  kind              ENUM('message','announcement') NOT NULL DEFAULT 'message',
+  body              VARCHAR(2000) NOT NULL,
+  client_request_id CHAR(36) NOT NULL,
+  created_at        DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_chat_messages_request (sender_id, client_request_id),
+  KEY idx_chat_messages_kind_id (kind, id),
+  CONSTRAINT fk_chat_messages_sender FOREIGN KEY (sender_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 017_chat_mentions.sql ==========
+-- Team chat, part 2 of 3: @mentions. One row per mention occurrence, written in the same transaction as the message.
+-- The server finds mentions itself by matching "@handle" in the message text against the active team directory; the browser cannot
+-- claim a mention. start_pos / end_pos are the position of the "@handle" text inside body (JavaScript string offsets, end exclusive), so
+-- the screen can highlight exactly that text and old messages never change if someone is later renamed or deactivated.
+CREATE TABLE chat_mentions (
+  message_id BIGINT UNSIGNED NOT NULL,
+  start_pos  SMALLINT UNSIGNED NOT NULL,
+  end_pos    SMALLINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (message_id, start_pos),
+  KEY idx_chat_mentions_user (user_id, message_id),
+  CONSTRAINT fk_chat_mentions_message FOREIGN KEY (message_id) REFERENCES chat_messages (id) ON DELETE CASCADE,
+  CONSTRAINT fk_chat_mentions_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+========== 018_chat_reads.sql ==========
+-- Team chat, part 3 of 3: who has read how far. One row per user: the id of the newest message they have read. Everything with a higher id
+-- (sent by someone else) counts as unread for them. The cursor only ever moves forward (the service uses GREATEST). A user with no row has
+-- read nothing. The same cursors tell an admin how many people have read an announcement.
+CREATE TABLE chat_reads (
+  user_id              BIGINT UNSIGNED NOT NULL,
+  last_read_message_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at           DATETIME NOT NULL,
+  PRIMARY KEY (user_id),
+  CONSTRAINT fk_chat_reads_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -1,0 +1,566 @@
+diff --git a/backend/src/app.js b/backend/src/app.js
+index 4deaec8..fb07419 100644
+--- a/backend/src/app.js
++++ b/backend/src/app.js
+@@ -206,6 +206,10 @@ export function createApp({ config, authService, reportService, adminService, le
+   leadSheetRouter.get('/download.xlsx', asyncHandler(leadSheets.download));
+   api.use('/admin/lead-sheet', authenticate, authorize('admin'), leadSheetRouter);
+   api.use('/admin/receipt-reviews', authenticate, authorize('admin'), receiptReviewRouter);
++  // Admin marks an interview Attended / Did not come (the only admin write on interviews). Separate router: adminRouter stays read-only.
++  const interviewAttendanceRouter = express.Router();
++  interviewAttendanceRouter.put('/:id/attendance', asyncHandler(interviews.setAttendance));
++  api.use('/admin/interviews', authenticate, authorize('admin'), interviewAttendanceRouter);
+   // Admin creates BDE accounts (BDE role only; admin accounts stay CLI-only). Separate router, adminRouter stays read-only.
+   const employeesRouter = express.Router();
+   employeesRouter.post('/', asyncHandler(employees.create));
+diff --git a/backend/src/lib/interview-query.js b/backend/src/lib/interview-query.js
+index 5f24df5..2c9a0fc 100644
+--- a/backend/src/lib/interview-query.js
++++ b/backend/src/lib/interview-query.js
+@@ -2,7 +2,7 @@
+ import { isRealDate } from './validate-daily-report.js';
+ import { ATTENDANCE_VALUES, OUTCOME_VALUES } from './validate-interview.js';
+ 
+-export const WHEN_FILTERS = ['upcoming', 'today', 'needs_update'];
++export const WHEN_FILTERS = ['upcoming', 'today', 'needs_update', 'past'];
+ export const INTERESTED_FILTERS = ['yes', 'no', 'unknown'];
+ export const PAYMENT_FILTERS = ['yes', 'no'];
+ 
+diff --git a/backend/src/lib/interview-search-sql.js b/backend/src/lib/interview-search-sql.js
+index 6de2a10..91b19d9 100644
+--- a/backend/src/lib/interview-search-sql.js
++++ b/backend/src/lib/interview-search-sql.js
+@@ -11,6 +11,7 @@ function dateConditions(filters, column) {
+   const where = []; const params = [];
+   if (filters.when === 'today') { where.push(`${column} >= ? AND ${column} < ?`); params.push(start(filters.today), start(addDays(filters.today, 1))); }
+   else if (filters.when === 'upcoming') { where.push(`${column} >= ?`); params.push(start(addDays(filters.today, 1))); }
++  else if (filters.when === 'past') { where.push(`${column} < ?`); params.push(start(filters.today)); }
+   else if (filters.when === 'needs_update') { where.push(`${column} < ? AND i.attendance = 'pending'`); params.push(start(filters.today)); }
+   if (filters.scheduledFrom) { where.push(`${column} >= ?`); params.push(start(filters.scheduledFrom)); }
+   if (filters.scheduledTo) { where.push(`${column} < ?`); params.push(start(addDays(filters.scheduledTo, 1))); }
+diff --git a/backend/src/modules/interviews/interviews.handlers.js b/backend/src/modules/interviews/interviews.handlers.js
+index 71ebc1a..4825454 100644
+--- a/backend/src/modules/interviews/interviews.handlers.js
++++ b/backend/src/modules/interviews/interviews.handlers.js
+@@ -1,4 +1,4 @@
+-// Same handlers are mounted twice: /api/interviews (BDE) and /api/admin/interviews (admin, read-only).
++// Same handlers are mounted twice: /api/interviews (BDE) and /api/admin/interviews (admin: reads, plus the attendance action).
+ // The service decides what the caller (req.user) may do.
+ export function createInterviewHandlers({ interviewService }) {
+   return {
+@@ -7,6 +7,7 @@ export function createInterviewHandlers({ interviewService }) {
+     async overview(req, res) { res.status(200).json(await interviewService.overview(req.user, req.query)); },
+     async get(req, res) { res.status(200).json({ interview: await interviewService.get(req.user, req.params.id, req.query) }); },
+     async create(req, res) { res.status(201).json({ interview: await interviewService.create(req.user, req.body) }); },
+-    async update(req, res) { res.status(200).json({ interview: await interviewService.update(req.user, req.params.id, req.body) }); }
++    async update(req, res) { res.status(200).json({ interview: await interviewService.update(req.user, req.params.id, req.body) }); },
++    async setAttendance(req, res) { res.status(200).json({ interview: await interviewService.setAttendance(req.user, req.params.id, req.body) }); }
+   };
+ }
+diff --git a/backend/src/modules/interviews/interviews.repository.js b/backend/src/modules/interviews/interviews.repository.js
+index 3b9eb67..6a80b2d 100644
+--- a/backend/src/modules/interviews/interviews.repository.js
++++ b/backend/src/modules/interviews/interviews.repository.js
+@@ -44,6 +44,17 @@ export function createInterviewRepository(db) {
+       );
+     },
+ 
++    // Admin attendance action: changes only attendance + updated_at. The WHERE guard repeats the "outcome needs attendance" rule in SQL,
++    // so an outcome recorded between the service's read and this write cannot end up beside 'did_not_attend'. Returns the matched row count.
++    async setAttendance(id, attendance) {
++      const r = await db.query(
++        `UPDATE interviews SET attendance = ?, updated_at = UTC_TIMESTAMP()
++          WHERE id = ? AND (? = 'attended' OR outcome = 'pending')`,
++        [attendance, id, attendance]
++      );
++      return r && typeof r.affectedRows === 'number' ? r.affectedRows : null;
++    },
++
+     async search({ scopeUserId, filters }) {
+       const { whereSql, params } = buildInterviewSearch({ scopeUserId, filters });
+       const from = ' FROM interviews i JOIN leads l ON l.id = i.lead_id JOIN users u ON u.id = i.user_id ';
+diff --git a/backend/src/modules/interviews/interviews.service.js b/backend/src/modules/interviews/interviews.service.js
+index da3d885..5927d55 100644
+--- a/backend/src/modules/interviews/interviews.service.js
++++ b/backend/src/modules/interviews/interviews.service.js
+@@ -1,5 +1,5 @@
+ import { HttpError } from '../../lib/http-error.js';
+-import { validateInterview } from '../../lib/validate-interview.js';
++import { validateInterview, OUTCOME_REQUIRES_ATTENDANCE } from '../../lib/validate-interview.js';
+ import { parseInterviewQuery, parseOverviewQuery } from '../../lib/interview-query.js';
+ import { parseSummaryQuery } from '../../lib/lead-query.js';
+ 
+@@ -10,7 +10,7 @@ function requireViewer(actor) {
+   if (!isBde(actor) && !isAdmin(actor)) throw new HttpError(403, 'FORBIDDEN', 'You do not have access to this resource.');
+ }
+ function requireBde(actor) {
+-  // Admin screens are read-only in this phase: only the owning BDE creates or edits interviews.
++  // Admin screens are read-only for creating/editing: only the owning BDE does that. The ONE admin write is setAttendance() below.
+   if (!isBde(actor)) throw new HttpError(403, 'FORBIDDEN', 'Only the BDE who owns the lead can create or change its interviews.');
+ }
+ function requireAdmin(actor) {
+@@ -45,6 +45,9 @@ function toInterview(r, { actor, today }) {
+   return interview;
+ }
+ 
++// What an admin may set with the attendance action. 'pending' is deliberately NOT allowed: the action records what happened, it does not undo it.
++export const ADMIN_ATTENDANCE_VALUES = ['attended', 'did_not_attend'];
++
+ const validationError = (errors) => new HttpError(400, 'VALIDATION_ERROR', 'Please fix the highlighted fields.', errors);
+ 
+ function parseId(idText) {
+@@ -120,6 +123,29 @@ export function createInterviewService({ repo }) {
+       if (!result.ok) throw validationError(result.errors);
+       await repo.update(id, actor.id, result.value);
+       return toInterview(await repo.findById(id, actor.id), { actor, today: null });
++    },
++
++    // Admin only: record that the candidate attended or did not come. Changes ONLY the attendance column (and updated_at).
++    // Existing rule kept: an outcome (Selected / Not selected) needs attendance = attended, so 'did_not_attend' is refused while an outcome is recorded.
++    async setAttendance(actor, idText, body) {
++      requireAdmin(actor);
++      const id = parseId(idText);
++      const attendance = body && typeof body === 'object' && !Array.isArray(body) ? body.attendance : undefined;
++      if (attendance === undefined || attendance === null || attendance === '') throw validationError({ attendance: 'Choose Attended or Did not come.' });
++      if (!ADMIN_ATTENDANCE_VALUES.includes(attendance)) throw validationError({ attendance: 'Choose Attended or Did not come.' });
++      const existing = await repo.findById(id, null);
++      if (!existing) throw new HttpError(404, 'NOT_FOUND', 'Interview not found.');
++      const blocked = (row) => OUTCOME_REQUIRES_ATTENDANCE && attendance !== 'attended' && row.outcome !== 'pending';
++      const conflict = () => new HttpError(409, 'OUTCOME_RECORDED', 'This interview already has an outcome (Selected or Not selected), which needs the candidate to have attended. The BDE must change the outcome first.');
++      if (blocked(existing)) throw conflict();
++      const changed = await repo.setAttendance(id, attendance);
++      if (changed !== 1) {
++        // Nothing was written. Either it vanished, the outcome was recorded in the meantime, or the value was already set (some drivers report 0 rows then).
++        const now = await repo.findById(id, null);
++        if (!now) throw new HttpError(404, 'NOT_FOUND', 'Interview not found.');
++        if (now.attendance !== attendance) throw blocked(now) ? conflict() : new HttpError(409, 'CHANGED_CONCURRENTLY', 'This interview was changed by someone else. Please reload and try again.');
++      }
++      return toInterview(await repo.findById(id, null), { actor, today: null });
+     }
+   };
+ }
+diff --git a/backend/tests/interview-attendance.test.js b/backend/tests/interview-attendance.test.js
+new file mode 100644
+index 0000000..4d5a4ff
+--- /dev/null
++++ b/backend/tests/interview-attendance.test.js
+@@ -0,0 +1,201 @@
++// Phase A1: the admin "Attended / Did not come" action. Service rules, the SQL text, the real Express route (authentication, role, JSON guard)
++// and the wiring. The database is replaced by in-memory fakes, so this is NOT a MySQL test: the real UPDATE has never run against MySQL.
++import test, { before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import { createApp } from '../src/app.js';
++import { createAuthService } from '../src/modules/auth/auth.service.js';
++import { createInterviewService } from '../src/modules/interviews/interviews.service.js';
++import { createInterviewRepository } from '../src/modules/interviews/interviews.repository.js';
++import { hashPassword } from '../src/lib/password.js';
++import { hashToken } from '../src/lib/session-token.js';
++
++const admin = { id: 1, role: 'admin', employeeId: 'ADM-1', name: 'Admin One' };
++const bde = (id) => ({ id, role: 'bde', employeeId: 'E' + id, name: 'BDE ' + id });
++
++// In-memory stand-in for the repository. setAttendance mirrors the SQL guard (outcome must be pending unless attending).
++function fakeRepo(seed) {
++  const rows = (seed || [
++    { id: 1, lead_id: 100, user_id: 10, scheduled_at: '2026-10-18 11:00:00', attendance: 'pending', outcome: 'pending', interested_in_joining: null },
++    { id: 2, lead_id: 101, user_id: 11, scheduled_at: '2026-10-10 10:00:00', attendance: 'attended', outcome: 'selected', interested_in_joining: 1 },
++    { id: 3, lead_id: 102, user_id: 10, scheduled_at: '2026-10-12 10:00:00', attendance: 'did_not_attend', outcome: 'pending', interested_in_joining: null }
++  ]).map((r) => ({ created_at: 'c', updated_at: 'u', ...r }));
++  const writes = []; let hook = null;
++  const joined = (i) => ({ ...i, bde_employee_id: 'E' + i.user_id, bde_name: 'BDE ' + i.user_id, payment_confirmed: 0, candidate_name: 'Cand ' + i.lead_id, phone: '9', email: null, course_or_internship: 'Data' });
++  return {
++    rows, writes, beforeWrite: (fn) => { hook = fn; },
++    findById: async (id, scope) => { const i = rows.find((r) => String(r.id) === String(id) && (scope == null || r.user_id === scope)); return i ? joined(i) : null; },
++    setAttendance: async (id, attendance) => {
++      if (hook) hook(rows);
++      const i = rows.find((r) => String(r.id) === String(id));
++      if (!i || !(attendance === 'attended' || i.outcome === 'pending')) return 0;
++      writes.push(['setAttendance', String(id), attendance]); i.attendance = attendance; i.updated_at = 'u2'; return 1;
++    },
++    update: async (id, userId, v) => { const i = rows.find((r) => r.id === Number(id) && r.user_id === userId); if (!i) return; writes.push(['update', id]); Object.assign(i, { attendance: v.attendance, outcome: v.outcome }); },
++    findOwnLead: async () => null, insert: async () => 0
++  };
++}
++const make = (seed) => { const repo = fakeRepo(seed); return { repo, svc: createInterviewService({ repo }) }; };
++const status = (p, s, code) => assert.rejects(p, (e) => e.status === s && (code === undefined || e.code === code));
++
++test('service: only an ADMIN can use it; a BDE (even the owner), unknown roles and no user get 403 and nothing is written', async () => {
++  const { repo, svc } = make();
++  for (const actor of [bde(10), bde(11), { id: 9, role: 'other' }, null, undefined]) await status(svc.setAttendance(actor, '1', { attendance: 'attended' }), 403, 'FORBIDDEN');
++  assert.deepEqual(repo.writes, []);
++  assert.equal(repo.rows[0].attendance, 'pending');
++});
++
++test('service: Attended and Did not come are saved; only attendance changes; the admin sees the BDE', async () => {
++  const { repo, svc } = make();
++  let i = await svc.setAttendance(admin, '1', { attendance: 'attended' });
++  assert.equal(i.attendance, 'attended'); assert.equal(i.outcome, 'pending'); assert.equal(i.bde.employeeId, 'E10');
++  assert.equal(i.scheduledAt, '2026-10-18T11:00'); assert.equal(repo.rows[0].interested_in_joining, null);
++  i = await svc.setAttendance(admin, '1', { attendance: 'did_not_attend' });
++  assert.equal(i.attendance, 'did_not_attend'); assert.deepEqual(repo.writes, [['setAttendance', '1', 'attended'], ['setAttendance', '1', 'did_not_attend']]);
++});
++
++test('service: an admin may correct a value the BDE entered (Did not come -> Attended), and repeating the same value is harmless', async () => {
++  const { repo, svc } = make();
++  assert.equal((await svc.setAttendance(admin, '3', { attendance: 'attended' })).attendance, 'attended');
++  assert.equal((await svc.setAttendance(admin, '3', { attendance: 'attended' })).attendance, 'attended');
++  assert.equal(repo.rows[2].outcome, 'pending');
++});
++
++test('service: invalid input -> 400 with the field, nothing written (pending is not allowed, nor wrong types)', async () => {
++  const { repo, svc } = make();
++  for (const body of [undefined, null, [], 'attended', {}, { attendance: '' }, { attendance: null }, { attendance: 'pending' }, { attendance: 'present' }, { attendance: 'ATTENDED' }, { attendance: true }, { attendance: ['attended'] }, { attendance: {} }]) {
++    await assert.rejects(svc.setAttendance(admin, '1', body), (e) => e.status === 400 && e.code === 'VALIDATION_ERROR' && Boolean(e.fields && e.fields.attendance), JSON.stringify(body));
++  }
++  for (const id of ['abc', '0', '-1', '1.5', '', ' 1', '1; DROP TABLE interviews', '1'.repeat(30), undefined, 5]) await status(svc.setAttendance(admin, id, { attendance: 'attended' }), 400, 'VALIDATION_ERROR');
++  assert.deepEqual(repo.writes, []);
++});
++
++test('service: a missing interview is 404 and nothing is written', async () => {
++  const { repo, svc } = make();
++  await status(svc.setAttendance(admin, '999', { attendance: 'attended' }), 404, 'NOT_FOUND');
++  assert.deepEqual(repo.writes, []);
++});
++
++test('service: existing rule kept - "Did not come" is refused (409) while a Selected / Not selected outcome is recorded; "Attended" is fine', async () => {
++  const { repo, svc } = make();
++  await status(svc.setAttendance(admin, '2', { attendance: 'did_not_attend' }), 409, 'OUTCOME_RECORDED');
++  assert.equal(repo.rows[1].attendance, 'attended'); assert.equal(repo.rows[1].outcome, 'selected'); assert.deepEqual(repo.writes, []);
++  assert.equal((await svc.setAttendance(admin, '2', { attendance: 'attended' })).outcome, 'selected');
++});
++
++test('service: an outcome recorded between the read and the write is not overwritten (409), and the data stays consistent', async () => {
++  const { repo, svc } = make();
++  repo.beforeWrite((rows) => { rows[0].attendance = 'attended'; rows[0].outcome = 'not_selected'; }); // the BDE saves an outcome at that moment
++  await status(svc.setAttendance(admin, '1', { attendance: 'did_not_attend' }), 409, 'OUTCOME_RECORDED');
++  assert.equal(repo.rows[0].attendance, 'attended'); assert.equal(repo.rows[0].outcome, 'not_selected');
++});
++
++test('service: the row deleted between the read and the write -> 404; a driver that reports 0 rows for an unchanged value still succeeds', async () => {
++  const gone = make(); gone.repo.beforeWrite((rows) => { rows.length = 0; });
++  await status(gone.svc.setAttendance(admin, '1', { attendance: 'attended' }), 404, 'NOT_FOUND');
++  const repo = fakeRepo(); repo.setAttendance = async () => 0; // e.g. no "found rows" flag: unchanged value reports 0
++  const svc = createInterviewService({ repo });
++  repo.rows[0].attendance = 'attended';
++  assert.equal((await svc.setAttendance(admin, '1', { attendance: 'attended' })).attendance, 'attended');
++  await status(svc.setAttendance(admin, '1', { attendance: 'did_not_attend' }), 409, 'CHANGED_CONCURRENTLY');
++});
++
++test('service: the BDE workflow is unchanged - the owner still edits, another BDE gets 404, the admin still cannot create or edit', async () => {
++  const { repo, svc } = make();
++  const full = { scheduledAt: '2026-10-18T11:00', attendance: 'attended', outcome: 'pending', interestedInJoining: null };
++  assert.equal((await svc.update(bde(10), '1', full)).attendance, 'attended');
++  await status(svc.update(bde(11), '1', full), 404, 'NOT_FOUND');
++  await status(svc.update(admin, '1', full), 403, 'FORBIDDEN');
++  await status(svc.create(admin, { leadId: 100, scheduledAt: '2026-10-18T11:00' }), 403, 'FORBIDDEN');
++  assert.deepEqual(repo.writes, [['update', '1']]);
++});
++
++test('repository SQL: changes only attendance and updated_at; every value is a placeholder; the guard repeats the outcome rule; the result is the matched row count', async () => {
++  const calls = [];
++  const repo = createInterviewRepository({ query: async (sql, params) => { calls.push({ sql: sql.replace(/\s+/g, ' ').trim(), params }); return { affectedRows: 1 }; } });
++  assert.equal(await repo.setAttendance('7', 'did_not_attend'), 1);
++  assert.equal(calls.length, 1);
++  assert.equal(calls[0].sql, "UPDATE interviews SET attendance = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND (? = 'attended' OR outcome = 'pending')");
++  assert.deepEqual(calls[0].params, ['did_not_attend', '7', 'did_not_attend']);
++  const evil = createInterviewRepository({ query: async (sql, params) => { calls.push({ sql, params }); return { affectedRows: 0 }; } });
++  assert.equal(await evil.setAttendance("1' OR '1'='1", 'attended'), 0);
++  assert.ok(!calls.at(-1).sql.includes('OR \'1\''), 'input never reaches the SQL text');
++  const odd = createInterviewRepository({ query: async () => undefined });
++  assert.equal(await odd.setAttendance('1', 'attended'), null, 'unrecognised driver result is not mistaken for success');
++});
++
++test('wiring (text): one PUT route on a separate admin-only router before the /admin guard; adminRouter stays read-only; no migration or schema file touched', () => {
++  const app = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
++  assert.match(app, /api\.use\('\/admin\/interviews', authenticate, authorize\('admin'\), interviewAttendanceRouter\)/);
++  assert.equal((app.match(/interviewAttendanceRouter\.\w+\(/g) || []).length, 1); assert.match(app, /interviewAttendanceRouter\.put\('\/:id\/attendance'/);
++  assert.ok(app.indexOf("api.use('/admin/interviews'") < app.indexOf("api.use('/admin', authenticate"));
++  assert.equal((app.match(/adminRouter\.(post|put|patch|delete)\(/g) || []).length, 0);
++  const repoSrc = readFileSync(new URL('../src/modules/interviews/interviews.repository.js', import.meta.url), 'utf8');
++  assert.equal((repoSrc.match(/\b(INSERT|DELETE|ALTER|DROP|TRUNCATE|CREATE)\b/g) || []).length, 1, 'only the pre-existing INSERT INTO interviews');
++});
++
++// ---- the real Express app: authentication, role and the JSON guard (in-memory repositories) ----
++const config = { cookieName: 'bde_session', cookieSecure: false, sessionTtlHours: 8, trustProxy: false, loginRateLimitMax: 1000, chatSendRateLimitMax: 1000, receiptMaxBytes: 1024 * 1024, importMaxBytes: 1024 * 1024 };
++let server; let base; let repo; const users = []; const sessions = new Map();
++before(async () => {
++  users.push(
++    { id: 1, employee_id: 'ADM-1', name: 'Admin One', role: 'admin', is_active: 1, password_hash: await hashPassword('admin-password-1') },
++    { id: 10, employee_id: 'BDE-10', name: 'Bde Ten', role: 'bde', is_active: 1, password_hash: await hashPassword('bde-password-10') }
++  );
++  const authRepo = {
++    findUserByEmployeeId: async (id) => users.find((u) => u.employee_id.toLowerCase() === String(id).toLowerCase()) || null,
++    createSession: async ({ userId, tokenHash }) => { sessions.set(tokenHash, userId); return true; },
++    findActiveSessionUser: async (h) => { const u = users.find((x) => x.id === sessions.get(h)); return u && u.is_active ? { id: u.id, employee_id: u.employee_id, name: u.name, role: u.role } : null; },
++    deleteSessionByHash: async (h) => { sessions.delete(h); }, deleteExpiredSessionsForUser: async () => {}
++  };
++  repo = fakeRepo();
++  const app = createApp({ config, authService: createAuthService({ repo: authRepo, ttlHours: 8 }), interviewService: createInterviewService({ repo }), checkDb: async () => {} });
++  await new Promise((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
++  base = `http://127.0.0.1:${server.address().port}`;
++});
++after(async () => { await new Promise((resolve) => server.close(resolve)); });
++
++async function call(method, path, { body, cookie, contentType = 'application/json' } = {}) {
++  const res = await fetch(base + path, { method, headers: { ...(body !== undefined ? { 'content-type': contentType } : {}), ...(cookie ? { cookie } : {}) }, body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)) });
++  const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch { /* not JSON */ }
++  const sc = res.headers.get('set-cookie');
++  return { status: res.status, json, cookie: sc ? sc.split(';')[0] : null };
++}
++const signIn = async (employeeId, password, portal) => (await call('POST', '/api/auth/login', { body: portal ? { employeeId, password, portal } : { employeeId, password } })).cookie;
++
++test('HTTP: no session -> 401, a BDE -> 403 (nothing written); the admin gets 200 with the interview', async () => {
++  const url = '/api/admin/interviews/1/attendance';
++  const none = await call('PUT', url, { body: { attendance: 'attended' } });
++  assert.equal(none.status, 401); assert.equal(none.json.error.code, 'UNAUTHENTICATED');
++  const b = await call('PUT', url, { body: { attendance: 'attended' }, cookie: await signIn('BDE-10', 'bde-password-10') });
++  assert.equal(b.status, 403); assert.deepEqual(repo.writes, []);
++  const a = await call('PUT', url, { body: { attendance: 'attended' }, cookie: await signIn('ADM-1', 'admin-password-1', 'admin') });
++  assert.equal(a.status, 200); assert.equal(a.json.interview.attendance, 'attended'); assert.equal(a.json.interview.bde.employeeId, 'E10');
++  assert.deepEqual(repo.writes, [['setAttendance', '1', 'attended']]);
++});
++
++test('HTTP: error answers use the standard { error: { code, message, fields } } shape (400, 404, 409) and the JSON guard still applies', async () => {
++  const cookie = await signIn('ADM-1', 'admin-password-1', 'admin');
++  const bad = await call('PUT', '/api/admin/interviews/1/attendance', { body: { attendance: 'pending' }, cookie });
++  assert.equal(bad.status, 400); assert.equal(bad.json.error.code, 'VALIDATION_ERROR'); assert.ok(bad.json.error.fields.attendance);
++  assert.equal((await call('PUT', '/api/admin/interviews/abc/attendance', { body: { attendance: 'attended' }, cookie })).status, 400);
++  const missing = await call('PUT', '/api/admin/interviews/999/attendance', { body: { attendance: 'attended' }, cookie });
++  assert.equal(missing.status, 404); assert.equal(missing.json.error.code, 'NOT_FOUND');
++  const conflict = await call('PUT', '/api/admin/interviews/2/attendance', { body: { attendance: 'did_not_attend' }, cookie });
++  assert.equal(conflict.status, 409); assert.equal(conflict.json.error.code, 'OUTCOME_RECORDED');
++  const form = await call('PUT', '/api/admin/interviews/1/attendance', { body: 'attendance=attended', contentType: 'application/x-www-form-urlencoded', cookie });
++  assert.ok(form.status >= 400 && form.status < 500, 'a form post is refused like every other write'); assert.equal(repo.rows[0].attendance, 'attended');
++});
++
++test('HTTP: other methods on the path write nothing, the existing admin reads still need an admin, and the BDE route for the same interview is unchanged', async () => {
++  const bdeCookie = await signIn('BDE-10', 'bde-password-10');
++  const adminCookie = await signIn('ADM-1', 'admin-password-1', 'admin');
++  const before = JSON.stringify(repo.rows);
++  for (const method of ['POST', 'PATCH', 'DELETE']) { const r = await call(method, '/api/admin/interviews/1/attendance', { body: { attendance: 'did_not_attend' }, cookie: adminCookie }); assert.ok(r.status >= 400, method); }
++  assert.equal(JSON.stringify(repo.rows), before);
++  assert.equal((await call('GET', '/api/admin/interviews/1', { cookie: bdeCookie })).status, 403);
++  assert.equal((await call('GET', '/api/admin/interviews/1', { cookie: adminCookie })).status, 200);
++  const full = { scheduledAt: '2026-10-18T11:00', attendance: 'attended', outcome: 'pending', interestedInJoining: null };
++  assert.equal((await call('PUT', '/api/interviews/1', { body: full, cookie: bdeCookie })).status, 200, 'the owning BDE still edits through the BDE route');
++  assert.equal((await call('PUT', '/api/interviews/1', { body: full, cookie: adminCookie })).status, 403, 'the admin still cannot use the BDE edit route');
++});
+diff --git a/backend/tests/interview-query-sql.test.js b/backend/tests/interview-query-sql.test.js
+index b8a86d5..26a817e 100644
+--- a/backend/tests/interview-query-sql.test.js
++++ b/backend/tests/interview-query-sql.test.js
+@@ -11,7 +11,7 @@ test('query defaults', () => {
+   assert.deepEqual(r.value, { q: '', attendance: null, outcome: null, interested: null, paymentConfirmed: null, when: null, scheduledFrom: null, scheduledTo: null, leadId: null, bdeId: null, today: null, page: 1, pageSize: 25 });
+ });
+ test('"when" filters need a valid today; others do not', () => {
+-  for (const w of ['upcoming', 'today', 'needs_update']) { assert.ok(parse({ when: w }).errors.today, w); assert.equal(parse({ when: w, today: '2026-06-15' }).ok, true); }
++  for (const w of ['upcoming', 'today', 'needs_update', 'past']) { assert.ok(parse({ when: w }).errors.today, w); assert.equal(parse({ when: w, today: '2026-06-15' }).ok, true); }
+   assert.equal(parse({ attendance: 'attended' }).ok, true);
+ });
+ test('bad filters are rejected, repeated params (arrays) too', () => {
+@@ -60,6 +60,11 @@ test('SQL: when = today / upcoming / needs_update use day boundaries', () => {
+   r = buildInterviewSearch({ scopeUserId: 1, filters: F({ when: 'needs_update', today: '2026-06-15' }) });
+   assert.match(r.whereSql, /i\.scheduled_at < \? AND i\.attendance = 'pending'/); assert.deepEqual(r.params, [1, '2026-06-15 00:00:00']);
+ });
++test('SQL: when = past means interview date before today (any attendance); BDE scope is kept', () => {
++  const r = buildInterviewSearch({ scopeUserId: 4, filters: F({ when: 'past', today: '2026-06-15' }) });
++  assert.match(r.whereSql, /i\.user_id = \?/); assert.match(r.whereSql, /i\.scheduled_at < \?/); assert.ok(!/attendance/.test(r.whereSql));
++  assert.deepEqual(r.params, [4, '2026-06-15 00:00:00']);
++});
+ test('SQL: enum, interest, payment and range filters', () => {
+   const r = buildInterviewSearch({ scopeUserId: 1, filters: F({ attendance: 'attended', outcome: 'selected', interested: 'unknown', paymentConfirmed: 'yes', leadId: '4', scheduledFrom: '2026-06-01', scheduledTo: '2026-06-30' }) });
+   assert.match(r.whereSql, /i\.attendance = \?/); assert.match(r.whereSql, /i\.outcome = \?/);
+diff --git a/frontend/src/api/client.js b/frontend/src/api/client.js
+index 5307ab9..bbd9165 100644
+--- a/frontend/src/api/client.js
++++ b/frontend/src/api/client.js
+@@ -87,6 +87,8 @@ export const api = {
+   createInterview: (payload) => request('POST', '/interviews', payload),
+   updateInterview: (id, payload) => request('PUT', '/interviews/' + encodeURIComponent(id), payload),
+   adminListInterviews: (qs) => request('GET', '/admin/interviews?' + qs),
++  // The one admin write on interviews: set attendance to 'attended' or 'did_not_attend' (admin only; the server enforces it).
++  adminSetInterviewAttendance: (id, attendance) => request('PUT', '/admin/interviews/' + encodeURIComponent(id) + '/attendance', { attendance }),
+   adminInterviewSummary: (today) => request('GET', '/admin/interviews/summary?today=' + encodeURIComponent(today)),
+   adminInterviewOverview: (qs) => request('GET', '/admin/interviews/overview?' + qs),
+   // Payments (BDE: own leads only) and the read-only admin view
+diff --git a/frontend/src/components/InterviewsListView.jsx b/frontend/src/components/InterviewsListView.jsx
+index 7e237b6..92b92f3 100644
+--- a/frontend/src/components/InterviewsListView.jsx
++++ b/frontend/src/components/InterviewsListView.jsx
+@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
+ import { Link, useLocation } from 'react-router-dom';
+ import { api } from '../api/client.js';
+ import { todayValue, formatDateTime } from '../lib/format.js';
++import { attendanceActions, replaceInterview, ADMIN_INTERVIEW_TABS } from '../lib/interview-attendance.js';
+ import { ATTENDANCE_LABEL, OUTCOME_LABEL, ATTENDANCE_BADGE, OUTCOME_BADGE, STATE_BADGE, interestedText } from '../lib/interview-labels.js';
+ 
+ const EMPTY = { q: '', when: '', attendance: '', outcome: '', interested: '', paymentConfirmed: '', scheduledFrom: '', scheduledTo: '', bdeId: '' };
+@@ -16,7 +17,7 @@ function buildQuery(applied, page, today) {
+   return p.toString();
+ }
+ 
+-// mode "bde": the BDE's own interviews (can edit). mode "admin": whole team, read-only, shows the responsible BDE.
++// mode "bde": the BDE's own interviews (can edit). mode "admin": whole team, shows the responsible BDE; the admin can only mark Attended / Didn't come.
+ export default function InterviewsListView({ mode }) {
+   const admin = mode === 'admin';
+   const location = useLocation();
+@@ -29,6 +30,7 @@ export default function InterviewsListView({ mode }) {
+   const [bdes, setBdes] = useState([]);
+   const [summary, setSummary] = useState(null);
+   const [list, setList] = useState({ state: 'loading', data: null, message: '' });
++  const [marking, setMarking] = useState({ id: null, error: null }); // admin attendance action in progress / last failure (per row)
+ 
+   useEffect(() => { if (admin) api.adminListBdes().then((d) => setBdes(d.bdes)).catch(() => {}); }, [admin]);
+   useEffect(() => {
+@@ -62,6 +64,22 @@ export default function InterviewsListView({ mode }) {
+   function clearFilters() { setFilterError(''); setForm(EMPTY); setApplied(EMPTY); setPage(1); }
+   function quick(when) { const next = { ...EMPTY, when }; setFilterError(''); setForm(next); setApplied(next); setPage(1); }
+ 
++  async function mark(i, attendance) {
++    setMarking({ id: i.id, error: null });
++    try {
++      const { interview } = await api.adminSetInterviewAttendance(i.id, attendance);
++      setList((l) => (l.state === 'ready' ? { ...l, data: replaceInterview(l.data, interview) } : l));
++      setFlash(`${i.lead.candidateName}: marked ${attendance === 'attended' ? 'Attended' : "Didn't come"}.`);
++      setMarking({ id: null, error: null });
++      api.adminInterviewSummary(today).then((d) => setSummary(d)).catch(() => {});
++    } catch (err) {
++      setMarking({ id: i.id, error: err.message });
++      if (err.status === 404 || err.status === 409) load(); // the row changed or is gone: show the real state
++    }
++  }
++
++  // The tab that is lit: only when the date tab is the ONLY filter in use (any other filter means no tab describes the list).
++  const tabWhen = Object.entries(applied).every(([k, v]) => k === 'when' || !v) ? applied.when : null;
+   const data = list.data;
+   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+   const filtered = Object.values(applied).some(Boolean);
+@@ -80,6 +98,14 @@ export default function InterviewsListView({ mode }) {
+     <>
+       {flash && <div className="alert alert-success" role="status"><strong>{flash}</strong> <button type="button" className="btn-link" onClick={() => setFlash('')}>Dismiss</button></div>}
+ 
++      {admin && (
++        <div className="followup-summary" role="group" aria-label="Interview dates">
++          {ADMIN_INTERVIEW_TABS.map(([label, when]) => (
++            <button key={label} type="button" className={'btn ' + (tabWhen === when ? 'btn-primary' : 'btn-secondary')} aria-pressed={tabWhen === when} onClick={() => quick(when)}>{label}</button>
++          ))}
++        </div>
++      )}
++
+       {counts && (
+         <div className="followup-summary" role="group" aria-label="Interview summary">
+           <button type="button" className="summary-button" onClick={() => quick('needs_update')}><span className="n">{counts.needsUpdate}</span> Need attendance update</button>
+@@ -134,6 +160,7 @@ export default function InterviewsListView({ mode }) {
+               <tr>
+                 <th>Candidate</th><th>Course / internship</th><th>Interview</th><th>Attendance</th><th>Outcome</th><th>Interested</th><th>Payment</th>
+                 {admin && <th>BDE</th>}
++                {admin && <th>Attendance action</th>}
+                 {!admin && <th><span className="sr-only">Actions</span></th>}
+               </tr>
+             </thead>
+@@ -151,6 +178,16 @@ export default function InterviewsListView({ mode }) {
+                   <td>{i.interestedInJoining === null ? <span className="muted">—</span> : interestedText(i.interestedInJoining)}</td>
+                   <td>{i.paymentConfirmed ? <span className="badge badge-success">Confirmed</span> : <span className="muted">Not confirmed</span>}</td>
+                   {admin && <td>{i.bde.name} <span className="muted">({i.bde.employeeId})</span></td>}
++                  {admin && (
++                    <td>
++                      <div className="filter-actions">
++                        {attendanceActions(i, { busy: marking.id === i.id && !marking.error }).map((a) => (
++                          <button key={a.value} type="button" className={'btn ' + (a.value === 'attended' ? 'btn-primary' : 'btn-secondary')} disabled={a.disabled} title={a.reason || undefined} onClick={() => mark(i, a.value)}>{a.label}</button>
++                        ))}
++                      </div>
++                      {marking.id === i.id && marking.error && <p className="field-error" role="alert">{marking.error}</p>}
++                    </td>
++                  )}
+                   {!admin && <td><Link to={`/interviews/${i.id}/edit`}>Edit</Link></td>}
+                 </tr>
+               ))}
+diff --git a/frontend/src/lib/interview-attendance.js b/frontend/src/lib/interview-attendance.js
+new file mode 100644
+index 0000000..fc9b431
+--- /dev/null
++++ b/frontend/src/lib/interview-attendance.js
+@@ -0,0 +1,22 @@
++// Admin "Attended / Did not come" buttons for one interview row. Mirrors the server rule (the server is the real check):
++// an outcome (Selected / Not selected) needs attendance = attended, so "Did not come" is unavailable while an outcome is recorded.
++export const ADMIN_ATTENDANCE_ACTIONS = [['attended', 'Attended'], ['did_not_attend', "Didn't come"]];
++export const OUTCOME_BLOCK_REASON = 'A Selected / Not selected outcome is recorded. The BDE must change the outcome first.';
++
++// -> [{ value, label, current, disabled, reason }]
++export function attendanceActions(interview, { busy = false } = {}) {
++  return ADMIN_ATTENDANCE_ACTIONS.map(([value, label]) => {
++    const current = interview.attendance === value;
++    const blocked = value === 'did_not_attend' && interview.outcome !== 'pending';
++    return { value, label, current, disabled: busy || current || blocked, reason: blocked && !current ? OUTCOME_BLOCK_REASON : '' };
++  });
++}
++
++// Replaces one interview inside a loaded list page without touching the others (a new object; the input is not changed).
++export function replaceInterview(list, updated) {
++  if (!list || !Array.isArray(list.interviews)) return list;
++  return { ...list, interviews: list.interviews.map((i) => (i.id === updated.id ? { ...i, attendance: updated.attendance, outcome: updated.outcome, state: i.state === 'needs_update' && updated.attendance !== 'pending' ? null : i.state } : i)) };
++}
++
++// Admin tabs: [label, value of the existing "when" filter]. "All" = no filter, which is how the page already opens.
++export const ADMIN_INTERVIEW_TABS = [['Today', 'today'], ['Upcoming', 'upcoming'], ['Past', 'past'], ['All', '']];
+diff --git a/frontend/src/lib/interview-attendance.test.js b/frontend/src/lib/interview-attendance.test.js
+new file mode 100644
+index 0000000..dcf0da8
+--- /dev/null
++++ b/frontend/src/lib/interview-attendance.test.js
+@@ -0,0 +1,41 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import { attendanceActions, replaceInterview, ADMIN_INTERVIEW_TABS, OUTCOME_BLOCK_REASON } from './interview-attendance.js';
++
++const row = (o = {}) => ({ id: 1, attendance: 'pending', outcome: 'pending', state: null, ...o });
++
++test('pending interview: both actions are available', () => {
++  const [a, d] = attendanceActions(row());
++  assert.deepEqual([a.value, a.disabled, a.current], ['attended', false, false]); assert.deepEqual([d.value, d.disabled, d.current], ['did_not_attend', false, false]);
++});
++test('the current value is marked and disabled; the other stays available (the admin can correct it)', () => {
++  const [a, d] = attendanceActions(row({ attendance: 'attended' }));
++  assert.equal(a.current, true); assert.equal(a.disabled, true); assert.equal(d.disabled, false);
++});
++test('"Didn\'t come" is unavailable with the reason while an outcome is recorded; "Attended" is not', () => {
++  const [a, d] = attendanceActions(row({ attendance: 'attended', outcome: 'selected' }));
++  assert.equal(d.disabled, true); assert.equal(d.reason, OUTCOME_BLOCK_REASON); assert.equal(a.reason, '');
++  assert.equal(attendanceActions(row({ attendance: 'pending', outcome: 'not_selected' }))[1].disabled, true);
++});
++test('while a request is running every button is disabled', () => { assert.ok(attendanceActions(row(), { busy: true }).every((x) => x.disabled)); });
++test('replaceInterview changes only that row and clears the "Update attendance" hint once attendance is set; input is not mutated', () => {
++  const list = { total: 2, interviews: [row({ id: 1, state: 'needs_update' }), row({ id: 2 })] };
++  const next = replaceInterview(list, { id: 1, attendance: 'did_not_attend', outcome: 'pending' });
++  assert.equal(next.interviews[0].attendance, 'did_not_attend'); assert.equal(next.interviews[0].state, null);
++  assert.equal(next.interviews[1], list.interviews[1]); assert.equal(list.interviews[0].attendance, 'pending'); assert.equal(next.total, 2);
++  assert.equal(replaceInterview(null, { id: 1 }), null);
++  const today = replaceInterview({ interviews: [row({ id: 3, state: 'today' })] }, { id: 3, attendance: 'attended', outcome: 'pending' });
++  assert.equal(today.interviews[0].state, 'today');
++});
++test('tabs: Today / Upcoming / Past / All map onto the "when" filter values the server accepts', () => {
++  assert.deepEqual(ADMIN_INTERVIEW_TABS.map((t) => t[0]), ['Today', 'Upcoming', 'Past', 'All']);
++  assert.deepEqual(ADMIN_INTERVIEW_TABS.map((t) => t[1]), ['today', 'upcoming', 'past', '']);
++});
++test('wiring (text): the client calls PUT /admin/interviews/:id/attendance; the list shows the actions in admin mode only', () => {
++  const client = readFileSync(new URL('../api/client.js', import.meta.url), 'utf8');
++  assert.match(client, /adminSetInterviewAttendance: \(id, attendance\) => request\('PUT', '\/admin\/interviews\/' \+ encodeURIComponent\(id\) \+ '\/attendance', \{ attendance \}\)/);
++  const view = readFileSync(new URL('../components/InterviewsListView.jsx', import.meta.url), 'utf8');
++  assert.match(view, /admin && <td>[\s\S]*attendanceActions/); assert.match(view, /api\.adminSetInterviewAttendance\(/);
++  assert.match(view, /\{!admin && <td><Link to=\{`\/interviews\/\$\{i\.id\}\/edit`\}>Edit<\/Link><\/td>\}/, 'BDE Edit link unchanged');
++});
+diff --git a/frontend/src/pages/AdminInterviewsPage.jsx b/frontend/src/pages/AdminInterviewsPage.jsx
+index 58888bf..6b41ca4 100644
+--- a/frontend/src/pages/AdminInterviewsPage.jsx
++++ b/frontend/src/pages/AdminInterviewsPage.jsx
+@@ -64,7 +64,7 @@ export default function AdminInterviewsPage() {
+   return (
+     <>
+       <h1>All Interviews</h1>
+-      <p className="hint">Interviews of the whole team, read-only. The responsible BDE is shown for every interview.</p>
++      <p className="hint">Interviews of the whole team. The responsible BDE is shown for every interview. You can mark whether a candidate attended; everything else is edited by the BDE.</p>
+       <h2 className="overview-title">Overview by BDE</h2>
+       <Overview />
+       <h2 className="overview-title">Interview list</h2>
