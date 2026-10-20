@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
-import { useAuth } from '../auth/AuthContext.jsx';
-import { FigureCards, TargetTable } from '../components/MonthlyFigures.jsx';
+import PageHeader from '../components/PageHeader.jsx';
+import { Attention, Card, Kpi, KpiRow, Metrics, SectionHead, rupees } from '../components/DashboardParts.jsx';
 import { attentionItems, reportForDay, todayLocal } from '../lib/dashboard.js';
-import { currentMonth, formatAmount } from '../lib/report-format.js';
+import { barWidth, currentMonth, formatCount, formatPercent as formatAchieved } from '../lib/report-format.js';
 import { formatPercent } from '../lib/call-desk.js';
 
 // Every number here is read from the existing APIs (daily reports, lead/interview/payment summaries, monthly report). Each block loads
@@ -19,19 +19,21 @@ function useBlock(load) {
   return [s, run];
 }
 
-function Block({ title, state, retry, children }) {
+// Achieved % of a monthly target, with the same progress bar the monthly screens use. No target = em dash and no bar.
+function Achieved({ pct, label }) {
   return (
-    <section className="panel" aria-label={title}>
-      <h2>{title}</h2>
-      {state.loading && <p role="status">Loading…</p>}
-      {state.error && <div className="alert alert-error" role="alert"><p>{state.error}</p><button type="button" className="btn btn-secondary" onClick={retry}>Try again</button></div>}
-      {!state.loading && !state.error && children}
-    </section>
+    <div>
+      <div className="progress-value">{formatAchieved(pct)}</div>
+      {pct !== null && pct !== undefined && (
+        <div className="progress" role="progressbar" aria-label={label} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.min(pct, 100)}>
+          <div className={'progress-bar' + (pct >= 100 ? ' is-complete' : '')} style={{ width: barWidth(pct) + '%' }} />
+        </div>
+      )}
+    </div>
   );
 }
 
 export default function BdeDashboardPage() {
-  const { user } = useAuth();
   const today = todayLocal();
   const month = currentMonth();
   const [reports, rReports] = useBlock(useCallback(() => api.listDailyReports().then((d) => d.reports), []));
@@ -52,57 +54,85 @@ export default function BdeDashboardPage() {
   const me = monthly.data && monthly.data.bdes[0];
   const t = payments.data && payments.data.totals;
 
+  const anyLoading = reports.loading || leads.loading || interviews.loading || payments.loading;
+  const anyFailed = Boolean(reports.error || leads.error || interviews.error || payments.error);
+  const noTargets = me && Object.values(me.targets).every((v) => v === null);
+  const monthRows = me ? [
+    ['Calls', me.figures.calls.total, formatCount(me.targets.calls), me.achievement.calls],
+    ['Interested leads', me.figures.calls.interested, formatCount(me.targets.interested), me.achievement.interested],
+    ['Interviews scheduled', me.figures.interviews.scheduled, formatCount(me.targets.interviews), me.achievement.interviews],
+    ['Revenue received', rupees(me.figures.revenueReceived), rupees(me.targets.revenue), me.achievement.revenue]
+  ] : [];
+
   return (
     <>
-      <h1>Dashboard</h1>
-      <p className="hint">Welcome, {user.name}. Everything below is read live from your own records.</p>
+      <PageHeader
+        title="Dashboard"
+        actions={<><Link className="btn btn-secondary" to="/daily-report">Daily report</Link><Link className="btn btn-primary" to="/call-desk">Call desk</Link></>}
+      />
 
-      <section className="panel panel-attention" aria-label="Needs attention">
-        <h2>Needs attention</h2>
-        {items.length === 0 ? <p>{reports.loading || leads.loading || interviews.loading || payments.loading ? 'Checking…' : 'Nothing needs attention right now.'}</p> : (
-          <ul>{items.map((i) => <li key={i.key}>{i.text} <Link to={i.to}>{i.cta}</Link></li>)}</ul>
-        )}
+      <Attention items={items} loading={anyLoading} incomplete={anyFailed} />
+
+      <KpiRow label="Key figures">
+        <Kpi label="Calls today" loading={calls.loading} error={calls.error} onRetry={rCalls}
+          value={callsToday}
+          note={callsToday > 0 ? `${callStats.interestedLeads} interested \u00B7 ${formatPercent(callStats.conversionRate)} of calls` : 'None recorded yet'}
+          to="/call-desk" cta="Call desk" />
+        <Kpi label="Overdue follow-ups" loading={leads.loading} error={leads.error} onRetry={rLeads}
+          value={leads.data ? leads.data.counts.overdue : 0} alert={Boolean(leads.data && leads.data.counts.overdue > 0)}
+          note={leads.data ? `${leads.data.counts.today} due today \u00B7 ${leads.data.counts.upcoming} in next ${leads.data.upcomingDays} days` : ''}
+          to="/leads" cta="Leads" />
+        <Kpi label="Interviews today" loading={interviews.loading} error={interviews.error} onRetry={rInterviews}
+          value={interviews.data ? interviews.data.counts.today : 0}
+          note={interviews.data ? `${interviews.data.counts.upcoming} upcoming \u00B7 ${interviews.data.counts.needsUpdate} to update` : ''}
+          to="/interviews" cta="Interviews" />
+        <Kpi label="Payments outstanding" loading={payments.loading} error={payments.error} onRetry={rPayments}
+          value={t ? rupees(t.outstanding) : '\u2014'}
+          note={t ? `${rupees(t.received)} received of ${rupees(t.committed)}` : ''}
+          to="/payments" cta="Payments" />
+      </KpiRow>
+
+      <div className="dash-stack">
+        <Card title="Daily report" state={reports} retry={rReports}
+          status={todays ? <span className="badge badge-success">Submitted</span> : callsToday > 0 ? <span className="badge badge-upcoming">Counted from Call desk</span> : <span className="badge badge-today">Not submitted</span>}
+          meta={todays ? <Link className="kpi-link" to="/daily-report">View reports</Link> : callsToday > 0 ? <Link className="kpi-link" to="/daily-report">Manual report</Link> : <Link className="kpi-link" to="/daily-report">Submit today's report</Link>}>
+          {todays ? <Metrics items={[['Calls', todays.totalCalls], ['Interested', todays.interested], ['Not interested', todays.notInterested], ['Follow-up', todays.followUpRequired], ['No response', todays.noResponse]]} />
+            : callsToday > 0 ? <p className="dash-muted">No manual report is needed today.</p> : null}
+        </Card>
+
+        <Card title="Payments" meta={<><span>All time</span><Link className="kpi-link" to="/payments">Open payments</Link></>} state={payments} retry={rPayments}>
+          {t && (
+            <div className="dash-groups">
+              <Metrics caption="Totals" items={[['Commitments', t.payments], ['Committed', rupees(t.committed)], ['Received', rupees(t.received)]]} />
+              <Metrics caption="Payment status" items={[['Pending', t.pending], ['Partially paid', t.partiallyPaid], ['Paid', t.paid]]} />
+              <Metrics caption="Payment proofs" items={[['Awaiting review', payments.data.proofs.awaitingReview], ['Approved', payments.data.proofs.approved], ['Rejected', payments.data.proofs.rejected]]} />
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <section aria-label="This month">
+        <SectionHead title="This month" meta={<>{monthly.data ? <span>{monthly.data.label}</span> : null}{' '}<Link className="kpi-link" to="/monthly">Open My Month</Link></>} />
+        {monthly.loading && <p className="dash-muted" role="status">Loading…</p>}
+        {monthly.error && <div className="alert alert-error" role="alert"><p>{monthly.error}</p><button type="button" className="btn btn-secondary" onClick={rMonthly}>Try again</button></div>}
+        {!monthly.loading && !monthly.error && (!me ? <p className="dash-muted">No activity recorded for {monthly.data ? monthly.data.label : 'this month'} yet.</p> : (
+          <div className="table-wrap dash-table dash-table-month">
+            <table>
+              <caption className="sr-only">Monthly actual figures against targets. Achieved percentages are calculated.</caption>
+              <thead><tr><th>Metric</th><th className="num">Actual</th><th className="num">Target</th><th>Achieved</th></tr></thead>
+              <tbody>
+                {monthRows.map(([label, actual, target, pct]) => (
+                  <tr key={label}>
+                    <td>{label}</td><td className="num">{actual}</td><td className="num">{target}</td>
+                    <td><Achieved pct={pct} label={`${label} achieved`} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+        {!monthly.loading && !monthly.error && noTargets && <p className="dash-muted dash-after">No targets set this month.</p>}
       </section>
-
-      <Block title="Today's calls (Call desk)" state={calls} retry={rCalls}>
-        {callStats && (callsToday > 0
-          ? <p><strong>{callsToday}</strong> call{callsToday === 1 ? '' : 's'} recorded today: {callStats.interestedLeads} interested lead{callStats.interestedLeads === 1 ? '' : 's'} ({formatPercent(callStats.conversionRate)} of calls). <Link to="/call-desk">Open Call desk</Link></p>
-          : <p>No calls recorded on the Call desk today yet. <Link to="/call-desk">Open Call desk</Link></p>)}
-      </Block>
-
-      <Block title="Today's calling report" state={reports} retry={rReports}>
-        {todays ? (
-          <p>Submitted: {todays.totalCalls} calls — {todays.interested} interested, {todays.notInterested} not interested, {todays.followUpRequired} follow-up, {todays.noResponse} no response. <Link to="/daily-report">View reports</Link></p>
-        ) : callsToday > 0 ? <p>No manual report is needed today: your Call desk calls are counted. <Link to="/daily-report">Manual report</Link></p>
-          : <p>No report submitted for today yet. <Link to="/daily-report">Submit today's report</Link></p>}
-      </Block>
-
-      <Block title="Follow-ups" state={leads} retry={rLeads}>
-        {leads.data && <p><strong>{leads.data.counts.overdue}</strong> overdue, <strong>{leads.data.counts.today}</strong> due today, <strong>{leads.data.counts.upcoming}</strong> in the next {leads.data.upcomingDays} days. <Link to="/leads">Open leads</Link></p>}
-      </Block>
-
-      <Block title="Interviews" state={interviews} retry={rInterviews}>
-        {interviews.data && <p><strong>{interviews.data.counts.today}</strong> today, <strong>{interviews.data.counts.upcoming}</strong> upcoming, <strong>{interviews.data.counts.needsUpdate}</strong> past and not yet updated. <Link to="/interviews">Open interviews</Link></p>}
-      </Block>
-
-      <Block title="Payments (all time)" state={payments} retry={rPayments}>
-        {t && (
-          <>
-            <p>{t.payments} commitment(s) worth {formatAmount(t.committed)}; {formatAmount(t.received)} received; {formatAmount(t.outstanding)} outstanding. {t.pending} pending, {t.partiallyPaid} partially paid, {t.paid} paid. <Link to="/payments">Open payments</Link></p>
-            <p>Payment proofs: {payments.data.proofs.awaitingReview} awaiting review, {payments.data.proofs.approved} approved, {payments.data.proofs.rejected} rejected.</p>
-          </>
-        )}
-      </Block>
-
-      <Block title="This month" state={monthly} retry={rMonthly}>
-        {!me ? <p>No activity recorded for {monthly.data ? monthly.data.label : 'this month'} yet.</p> : (
-          <>
-            <FigureCards block={me} />
-            {Object.values(me.targets).some((v) => v !== null) ? <TargetTable rows={[me]} /> : <p className="hint">No target has been set for you this month.</p>}
-            <p><Link to="/monthly">Open My Month</Link></p>
-          </>
-        )}
-      </Block>
     </>
   );
 }

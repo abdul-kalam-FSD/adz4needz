@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { validateLead } from '../lib/validate-lead.js';
 import { formatDate } from '../lib/format.js';
+import PageHeader from '../components/PageHeader.jsx';
 
 const EMPTY = { candidateName: '', phone: '', email: '', courseOrInternship: '', leadStatusId: '', followUpDate: '', nextAction: '' };
 const ORDER = ['candidateName', 'phone', 'email', 'courseOrInternship', 'leadStatusId', 'followUpDate', 'nextAction'];
@@ -92,7 +93,7 @@ export default function LeadFormPage() {
   return (
     <>
       {back}
-      <h1>{editing ? 'Edit lead' : 'Add lead'}</h1>
+      <PageHeader title={editing ? 'Edit lead' : 'Add lead'} />
       <form className="report-form" onSubmit={(e) => { e.preventDefault(); submit(false); }} noValidate aria-busy={saving}>
         {errorList.length > 0 && (
           <div className="alert alert-error" role="alert">

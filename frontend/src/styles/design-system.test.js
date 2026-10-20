@@ -4,8 +4,8 @@
 // SCOPE AND LIMITS (read before trusting a pass):
 //  - It checks colour pairs that are written as plain 6-digit hex values, plus a few structural rules (focus ring, reduced motion,
 //    no remote resources, no hidden-drawer keyboard trap, tables contain their .sr-only cells).
-//  - It does NOT render anything. Gradients are checked at their worst stop only where stated; translucent overlays (for example the
-//    green wash behind the active menu item) are checked against the opaque colour underneath, not blended.
+//  - It does NOT render anything. Gradients are checked at their worst stop only where stated; translucent overlays are checked against
+//    the opaque colour underneath, not blended. (v2 shell: the sidebar and top bar are light; every chrome colour is an opaque hex token.)
 //  - The sign-in screen and Team chat have their own tests (login-contrast.test.js, chat-contrast.test.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +32,8 @@ function rule(selector) {
 const hex = (v) => { const m = String(v).match(/#[0-9a-fA-F]{6}/); assert.ok(m, 'no hex in ' + v); return m[0]; };
 
 test('core tokens exist as 6-digit hex values', () => {
-  for (const n of ['purple-950', 'purple-900', 'purple-700', 'purple-600', 'purple-500', 'green-400', 'green-500', 'green-ink', 'bg', 'surface', 'surface-tint', 'ink', 'text', 'muted', 'field-border', 'error', 'error-bg', 'success', 'success-bg', 'warning', 'warning-bg']) t(n);
+  for (const n of ['purple-950', 'purple-900', 'purple-700', 'purple-600', 'purple-500', 'green-400', 'green-500', 'green-ink', 'bg', 'surface', 'surface-tint', 'ink', 'text', 'muted', 'field-border', 'error', 'error-bg', 'success', 'success-bg', 'warning', 'warning-bg', 'teal-50', 'surface-subtle', 'nav-bg', 'topbar-bg', 'nav-text', 'nav-icon', 'nav-hover-bg', 'nav-active-bg', 'nav-active-text', 'nav-disabled']) t(n);
+  assert.equal(t('green-500').toLowerCase(), '#0f766e', 'the approved primary teal');
 });
 
 test('body text and secondary text reach AA on every neutral surface; headings reach AAA on white', () => {
@@ -40,12 +41,13 @@ test('body text and secondary text reach AA on every neutral surface; headings r
   need(t('ink'), t('surface'), 7, 'headings');
 });
 
-test('links and the focus ring are readable on light surfaces; the focus ring on the dark menu and top bar is readable too', () => {
+test('links and the focus ring are readable on light surfaces; the focus ring on the light sidebar, top bar and selected item is readable too', () => {
   for (const bg of ['bg', 'surface']) need(t('purple-600'), t(bg), 4.5, 'link');
   need(t('purple-500'), t('surface'), 3, 'focus ring on white');
-  need('#a9bcae', t('purple-900'), 3, 'focus ring on the menu');
-  need('#a9bcae', t('purple-950'), 3, 'focus ring on the menu bottom');
-  assert.match(css, /\.topbar :focus-visible, \.sidebar :focus-visible \{ outline-color: var\(--green-400\); \}/);
+  for (const bg of ['nav-bg', 'topbar-bg', 'nav-hover-bg', 'nav-active-bg']) need(t('purple-500'), t(bg), 3, 'focus ring on ' + bg);
+  assert.match(root, /--focus: var\(--purple-500\)/); assert.match(root, /--link: var\(--primary-dark\)/);
+  assert.match(css, /:focus-visible \{\s*outline: 3px solid var\(--focus\);/);
+  assert.ok(!/\.topbar :focus-visible|\.sidebar :focus-visible/.test(css), 'the chrome uses the same ring as the content: no light override that would vanish on the light sidebar');
 });
 
 test('form controls: border is at least 3:1 against the field, the error state and messages are readable', () => {
@@ -53,25 +55,33 @@ test('form controls: border is at least 3:1 against the field, the error state a
   need(t('error'), t('error-bg'), 4.5, 'error message');
   need(t('success'), t('success-bg'), 4.5, 'success message');
   need(t('warning'), t('warning-bg'), 4.5, 'warning message');
-  need('#302d52', '#f4f3f8', 4.5, 'info notice');
-  need('#2f4a38', '#eef4ef', 4.5, 'lead box');
+  need(t('info-text').toLowerCase(), '#f1f5f9', 4.5, 'info notice (on --info-bg = --purple-50)'); assert.equal(t('purple-50'), '#f1f5f9');
+  assert.equal(hex(rule('.lead-box').color), '#14532d'); need('#14532d', t('success-soft'), 4.5, 'lead box');
 });
 
-test('primary button: white text on sage, in its normal and hover state; secondary and quiet buttons readable; no gradient or glow', () => {
+test('primary button: white text on teal, in its normal and hover state; secondary and quiet buttons readable; no gradient or glow', () => {
   need(t('on-primary'), t('green-500'), 4.5, 'primary');
   need(t('on-primary'), t('primary-dark'), 4.5, 'primary hover');
-  need(t('green-ink'), t('green-400'), 4.5, 'dark text on the light sage logo tile and menu badge');
+  need(t('green-ink'), t('green-400'), 4.5, 'dark text on light teal');
+  need('#ffffff', t('green-500'), 4.5, 'white on the teal logo tile and the unread badge');
   const btn = css.slice(css.indexOf('.btn-primary {'), css.indexOf('.btn-secondary {'));
   assert.ok(!/gradient|rgba\(100, 123, 104/.test(btn), 'primary button is flat');
   need(t('purple-800'), t('surface'), 4.5, 'secondary button');
   need(t('muted'), t('surface'), 4.5, 'quiet button');
 });
 
-test('app chrome: top bar, menu items, active item, user chip and both menu badges', () => {
-  for (const bg of [t('purple-700'), t('purple-900'), t('purple-950')]) { need('#f4f3f8', bg, 4.5, 'top bar text'); need('#d6d3e6', bg, 4.5, 'top bar secondary text'); }
-  for (const bg of [t('purple-900'), t('purple-950')]) { need('#d6d3e6', bg, 4.5, 'menu label'); need('#ffffff', bg, 4.5, 'active menu label'); need('#aaa6c9', bg, 3, 'menu icon'); need('#a9bcae', bg, 3, 'active marker'); need('#a8a5c4', bg, 4.5, 'disabled menu item'); }
-  need('#ffffff', '#5b5590', 4.5, 'avatar initials (darkest stop)');
-  need('#ffffff', '#5b5590', 4.5, 'avatar initials (lightest stop)');
+test('app chrome (light shell): top bar, menu items, hover, active item, user chip and both menu badges', () => {
+  // the pairs below are the ones the stylesheet really uses: bind each token to its rule first, then check contrast
+  assert.equal(rule('.topbar').background, 'var(--topbar-bg)'); assert.equal(rule('.sidebar').background, 'var(--nav-bg)');
+  assert.equal(rule('.nav-item').color, 'var(--nav-text)'); assert.equal(rule('.nav-icon').color, 'var(--nav-icon)');
+  assert.equal(rule('.nav-item.is-current').color, 'var(--nav-active-text)'); assert.equal(rule('.nav-item.is-current').background, 'var(--nav-active-bg)');
+  assert.equal(rule('.avatar').background, 'var(--purple-900)'); assert.match(css, /a\.nav-item:hover \{ background: var\(--nav-hover-bg\);/);
+  need(t('ink'), t('topbar-bg'), 7, 'top bar title and user name'); need(t('muted'), t('topbar-bg'), 4.5, 'top bar secondary text');
+  for (const bg of [t('nav-bg'), t('nav-hover-bg')]) { need(t('nav-text'), bg, 4.5, 'menu label'); need(t('nav-icon'), bg, 3, 'menu icon'); }
+  need(t('ink'), t('nav-hover-bg'), 4.5, 'hovered menu label');
+  need(t('nav-active-text'), t('nav-active-bg'), 4.5, 'active menu label'); need(t('green-500'), t('nav-active-bg'), 3, 'active icon'); need(t('green-500'), t('nav-bg'), 3, 'active marker');
+  need(t('nav-disabled'), t('nav-bg'), 4.5, 'disabled menu item');
+  need('#ffffff', t('purple-900'), 4.5, 'avatar initials');
   const badge = rule('.nav-badge'); const mention = rule('.nav-badge-mention');
   need(hex(badge.color), hex(badge.background), 4.5, 'unread badge'); need(hex(badge.color), hex(mention.background), 4.5, 'mention badge');
 });
@@ -84,9 +94,9 @@ test('status badges: every variant is readable on its own background', () => {
 });
 
 test('tables and cards: header text, tinted header, stat figures and filter chips are readable', () => {
-  need('#403b6b', t('surface-tint'), 4.5, 'table header');
-  need(t('text'), '#f8f7fa', 4.5, 'table row hover');
-  need('#292640', t('surface'), 7, 'stat figure');
+  need(t('muted'), t('surface-subtle'), 4.5, 'table header (muted on --surface-subtle)'); need(t('muted'), t('surface-tint'), 4.5, 'table footer');
+  need(t('text'), t('surface-subtle'), 4.5, 'table row hover'); assert.match(css, /\.table-wrap tbody tr:hover \{ background: var\(--surface-subtle\); \}/);
+  need(t('purple-900'), t('surface'), 7, 'stat figure'); assert.match(css, /\.stat-value \{[^}]*color: var\(--purple-900\)/);
   need(t('muted'), t('surface'), 4.5, 'stat label');
   need('#78350f', '#fbf5e6', 4.5, 'Needs attention panel');
 });
@@ -96,8 +106,9 @@ test('call desk outcome buttons are readable on their tinted backgrounds', () =>
 });
 
 test('progress bars: the filled part is distinguishable from the track (3:1), at the darkest stop of each gradient', () => {
-  need('#4f6554', '#e3e0ea', 3, 'progress fill');
-  need('#4f6554', '#e3e0ea', 3, 'completed progress fill');
+  assert.match(css, /\.progress \{[^}]*background: #dbe3ea;/); assert.match(css, /\.progress-bar \{[^}]*background: var\(--teal-700\)/);
+  need(t('teal-700'), '#dbe3ea', 3, 'progress fill');
+  need(t('teal-700'), '#dbe3ea', 3, 'completed progress fill');
 });
 
 test('the mobile menu drawer is hidden from keyboards until opened, and has a scrim to close it', () => {
@@ -122,9 +133,9 @@ test('no external resources (fonts, images, imports); only an inline data: image
   assert.ok(/url\("data:image\/svg\+xml/.test(css), 'the select arrow is an inline data: image');
 });
 
-test('sage text (links, skip link) is the darker sage and reaches AA on EVERY surface it is drawn on, including the warm page and the amber panel', () => {
-  for (const bg of ['#ffffff', t('bg'), t('surface-tint'), '#fbf5e6']) need(t('primary-dark'), bg, 4.5, 'sage link on ' + bg);
-  assert.ok(!/(^|[^-])color: var\(--primary\);/m.test(css), 'no rule uses the lighter button sage (#647b68) as TEXT colour: it is 4.2:1 on the warm page');
+test('teal text (links, skip link, selected menu item) is the darker teal and reaches AA on EVERY surface it is drawn on, including the page, the selected-item wash and the amber panel', () => {
+  for (const bg of ['#ffffff', t('bg'), t('surface-tint'), t('nav-active-bg'), '#fbf5e6']) need(t('primary-dark'), bg, 4.5, 'teal link on ' + bg);
+  assert.ok(!/(^|[^-])color: var\(--primary\);/m.test(css), 'no rule uses the button teal (--primary) as TEXT colour: text uses --primary-dark');
 });
 
 // ---- Phase 1: payment / proof-review badges and the new shared tokens -------------------------------------------------------
@@ -138,15 +149,16 @@ test('payment and proof-review badges: all six are readable on their own backgro
 });
 
 test('payment badges keep the existing palette: each colour pair is one that the app already used', () => {
-  const allowed = new Set(['#5f5e69|#ebe9f1', '#78350f|#f6e9c8', '#2f5a3d|#e1ebe3', '#302d52|#e8e6ef', '#2f5a3d|#edf3ee', '#991b1b|#fee2e2']);
+  const allowed = new Set(['#55657a|#e9eef3', '#78350f|#f6e9c8', '#166534|#dcefe2', '#1d3b58|#e3eaf1', '#166534|#ecf6ef', '#991b1b|#fee2e2']);
   for (const name of ['pay-pending', 'pay-partial', 'pay-paid', 'review-pending', 'review-approved', 'review-rejected']) {
     const r = rule('.badge-' + name);
     assert.ok(allowed.has((resolve(r.color) + '|' + resolve(r.background)).toLowerCase()), 'badge-' + name);
   }
 });
 
-test('new tokens: light text on the dark purple keeps AA, and the warning/success edge colours are the ones used before', () => {
-  for (const bg of [t('purple-900'), t('purple-950')]) { need(t('on-dark-muted'), bg, 4.5, 'secondary text on dark'); need(t('purple-50'), bg, 4.5, 'text on dark'); }
-  assert.equal(t('success-border'), '#b7ccbb'); assert.equal(t('warning-border'), '#e0c27a'); assert.equal(t('warning-edge'), '#c8892b'); assert.equal(t('success-soft'), '#eef4ef');
+test('shared tokens: text on every chrome surface keeps AA, and the status edge colours are the pinned ones', () => {
+  for (const bg of [t('nav-bg'), t('topbar-bg'), t('nav-hover-bg'), t('nav-active-bg')]) { need(t('nav-text'), bg, 4.5, 'text on ' + bg); need(t('ink'), bg, 4.5, 'strong text on ' + bg); }
+  for (const bg of [t('nav-bg'), t('topbar-bg')]) need(t('muted'), bg, 4.5, 'secondary text on ' + bg);
+  assert.equal(t('success-border'), '#b4d8c0'); assert.equal(t('warning-border'), '#e0c27a'); assert.equal(t('warning-edge'), '#c8892b'); assert.equal(t('success-soft'), '#ecf6ef');
   need(t('success'), t('success-soft'), 4.5, 'success text on the soft success background');
 });

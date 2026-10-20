@@ -103,7 +103,7 @@ test('VIS-01 / VIS-03: the legacy stylesheet is gone and nothing imports it; the
 });
 
 test('VIS-01: the new shared tokens exist and the repeated values now use them', () => {
-  for (const t of ['--on-dark', '--on-dark-muted', '--success-border', '--success-soft', '--warning-border', '--warning-edge']) assert.ok(css.includes('  ' + t + ':'), t);
+  for (const t of ['--nav-text', '--nav-bg', '--topbar-bg', '--nav-active-bg', '--nav-active-text', '--success-border', '--success-soft', '--warning-border', '--warning-edge']) assert.ok(css.includes('  ' + t + ':'), t);
   assert.ok(css.includes('border-left: 5px solid var(--warning-edge)'));
   assert.ok(!/stroke='%235b21b6'/.test(css), 'the old off-palette violet in the select arrow is gone');
 });

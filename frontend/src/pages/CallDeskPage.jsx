@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
+import PageHeader from '../components/PageHeader.jsx';
+import FollowUp from '../components/FollowUp.jsx';
+import { SectionHead } from '../components/DashboardParts.jsx';
 import { todayValue, formatDate } from '../lib/format.js';
 import { OUTCOMES, outcomeLabel, formatPercent, formatCallTime, beginAttempt, succeedAttempt, failAttempt, describeSaved, beginListLoad, finishListLoad, failListLoad, listShowsRows } from '../lib/call-desk.js';
 
 const PAGE_SIZE = 20;
+
+// Outcome -> the status badge it shares with the rest of the app (same accessible colours as the follow-up badges).
+const TONE_BADGE = { yes: 'badge-success', no: 'badge-overdue', follow: 'badge-today', none: 'badge-muted' };
+const toneBadge = (key) => TONE_BADGE[(OUTCOMES.find((o) => o.key === key) || {}).tone] || 'badge-muted';
+const OUTCOME_COUNT = { interested: 'interested', not_interested: 'notInterested', follow_up: 'followUp', no_response: 'noResponse' };
 
 // One click = one recorded call. Nothing is counted or shown as saved until the server confirms it; the totals are always the
 // server's numbers (re-read after every save), never computed in the browser.
@@ -87,30 +95,36 @@ export default function CallDeskPage() {
 
   return (
     <>
-      <div className="page-head"><h1>Call desk</h1></div>
-      <p className="hint">Click the result of each call. Every click is one call and is counted for today{day.data ? ` (${formatDate(day.data.today)})` : ''}. Calling the same person again counts as another call. The admin's daily view, the monthly report and your targets all use these calls. On a day you use the Call desk you do not need the Daily Report; if you submit both, only the Call desk calls are counted for that day.</p>
+      <PageHeader title="Call desk" description={`Each click records one call for today${day.data ? ` (${formatDate(day.data.today)})` : ''}.`} />
 
       {notice && <div className="alert alert-warning" role="status">{notice} <button type="button" className="btn-link" onClick={() => setNotice('')}>Dismiss</button></div>}
 
-      <section aria-label="Today's numbers">
-        {day.state === 'loading' && <p className="state-message">Loading today's numbers…</p>}
+      <section className="dash-card cd-today" aria-label="Today's numbers">
+        {day.state === 'loading' && <p className="dash-muted" role="status">Loading today's numbers…</p>}
         {day.state === 'error' && <div className="alert alert-error" role="alert"><strong>Could not load today's numbers.</strong> {day.message} <button type="button" className="btn btn-secondary" onClick={loadDay}>Retry</button></div>}
         {day.state === 'stale' && <div className="alert alert-error" role="alert">These numbers may be out of date: {day.message} <button type="button" className="btn btn-secondary" onClick={loadDay}>Retry</button></div>}
         {stats && (
-          <dl className="totals">
-            <div className="total-item"><dt>Calls today</dt><dd>{stats.totalCalls}</dd></div>
-            <div className="total-item"><dt>Different leads called</dt><dd>{stats.uniqueLeadsCalled}</dd></div>
-            <div className="total-item"><dt>Repeat calls</dt><dd>{stats.repeatCalls}</dd></div>
-            <div className="total-item"><dt>Interested leads</dt><dd>{stats.interestedLeads}</dd></div>
-            <div className="total-item"><dt>Interested leads ÷ calls</dt><dd>{formatPercent(stats.conversionRate)}</dd></div>
-            <div className="total-item"><dt>Interested / Not interested</dt><dd>{stats.outcomes.interested} / {stats.outcomes.notInterested}</dd></div>
-            <div className="total-item"><dt>Follow-up / No response</dt><dd>{stats.outcomes.followUp} / {stats.outcomes.noResponse}</dd></div>
-          </dl>
+          <>
+            <dl className="dash-metrics">
+              <div><dt>Calls today</dt><dd>{stats.totalCalls}</dd></div>
+              <div><dt>Different leads called</dt><dd>{stats.uniqueLeadsCalled}</dd></div>
+              <div><dt>Repeat calls</dt><dd>{stats.repeatCalls}</dd></div>
+              <div><dt>Interested leads</dt><dd>{stats.interestedLeads}</dd></div>
+              <div><dt>Interested leads ÷ calls</dt><dd>{formatPercent(stats.conversionRate)}</dd></div>
+            </dl>
+            <ul className="cd-outcomes" aria-label="Calls today by result">
+              {OUTCOMES.map((o) => <li key={o.key}><span className={'badge ' + toneBadge(o.key)}>{o.label} <strong>{stats.outcomes[OUTCOME_COUNT[o.key]]}</strong></span></li>)}
+            </ul>
+          </>
         )}
+        <details className="dash-note">
+          <summary>How calls are counted</summary>
+          <p>Every click is one call, and calling the same person again counts as another call. The admin's daily view, the monthly report and your targets all use these calls. On a day you use the Call desk you do not need the <Link to="/daily-report">Daily Report</Link>; if you submit both, only the Call desk calls are counted for that day.</p>
+        </details>
       </section>
 
-      <form className="filters" onSubmit={(e) => { e.preventDefault(); setPage(1); setApplied({ q: q.trim(), statusId }); }}>
-        <div className="field">
+      <form className="filters filters-bar" onSubmit={(e) => { e.preventDefault(); setPage(1); setApplied({ q: q.trim(), statusId }); }}>
+        <div className="field field-search">
           <label htmlFor="cd-q">Search</label>
           <input id="cd-q" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, phone, email or course" maxLength={100} />
         </div>
@@ -134,7 +148,7 @@ export default function CallDeskPage() {
         {showRows && data.leads.length === 0 && <p className="state-message">{applied.q || applied.statusId ? 'No leads match these filters.' : 'You have no leads yet. Ask the admin to import leads, or add one on the Leads page.'}</p>}
         {showRows && data.leads.length > 0 && (
           <table className="call-desk-table table-stack" role="table">
-            <thead role="rowgroup"><tr role="row"><th role="columnheader">Candidate</th><th role="columnheader">Phone</th><th role="columnheader">Status</th><th role="columnheader">Result of this call</th></tr></thead>
+            <thead role="rowgroup"><tr role="row"><th role="columnheader">Candidate</th><th role="columnheader">Phone</th><th role="columnheader">Status</th><th role="columnheader">Follow-up</th><th role="columnheader">Result of this call</th></tr></thead>
             <tbody role="rowgroup">
               {data.leads.map((l) => {
                 const r = rows[l.id] || {};
@@ -142,13 +156,17 @@ export default function CallDeskPage() {
                   <tr key={l.id} role="row">
                     <td role="cell" data-label="Candidate">{l.candidateName}<div className="muted">{l.courseOrInternship}</div></td>
                     <td role="cell" data-label="Phone">{l.phone || <span className="muted">—</span>}</td>
-                    <td role="cell" data-label="Status">{l.status.name}</td>
+                    <td role="cell" data-label="Status"><span className="status-chip">{l.status.name}</span></td>
+                    <td role="cell" data-label="Follow-up">
+                      <FollowUp lead={l} />
+                      {l.nextAction && <div className="muted clip2" title={l.nextAction}>Next: {l.nextAction}</div>}
+                    </td>
                     <td role="cell" data-label="Result of this call">
                       <div className="outcome-buttons" role="group" aria-label={`Record a call to ${l.candidateName}`}>
                         {OUTCOMES.map((o) => (
                           <button key={o.key} type="button" className={`btn btn-outcome btn-outcome-${o.tone}`} aria-disabled={r.pending ? 'true' : undefined} aria-busy={r.pending ? 'true' : undefined} onClick={() => { if (!r.pending) record(l, o.key); }}>{o.label}</button>
                         ))}
-                        <label className="followup-date"><span className="sr-only">Follow-up date for {l.candidateName}</span>
+                        <label className="followup-date"><span className="followup-date-label">Follow-up date</span><span className="sr-only"> for {l.candidateName}</span>
                           <input type="date" min={today} value={dates[l.id] || ''} onChange={(e) => setDates((d) => ({ ...d, [l.id]: e.target.value }))} title="Optional follow-up date, used with the Follow-up button" />
                         </label>
                       </div>
@@ -172,18 +190,23 @@ export default function CallDeskPage() {
         </div>
       )}
 
-      <h2 className="section-title">Today's calls</h2>
-      {day.data && day.data.entries.length === 0 && <p className="state-message">No calls recorded today yet.</p>}
+      <SectionHead title="Today's calls" meta="Undo removes a call from today's count; the lead's status stays as it is." />
+      {day.data && day.data.entries.length === 0 && <p className="dash-muted">No calls recorded today yet.</p>}
       {day.data && day.data.entries.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap calls-table">
           <table>
             <thead><tr><th>Time</th><th>Candidate</th><th>Result</th><th><span className="sr-only">Undo</span></th></tr></thead>
             <tbody>
               {day.data.entries.map((e) => (
                 <tr key={e.id}>
-                  <td>{formatCallTime(e.calledAt)}</td><td>{e.candidateName}</td><td>{outcomeLabel(e.outcome)}</td>
-                  <td>
-                    {e.canUndo && <button type="button" className="btn btn-secondary" disabled={Boolean(undoing[e.id] && undoing[e.id].pending)} onClick={() => undo(e)}>{undoing[e.id] && undoing[e.id].pending ? 'Removing…' : 'Undo'}</button>}
+                  <td>{formatCallTime(e.calledAt)}</td><td>{e.candidateName}</td><td><span className={'badge ' + toneBadge(e.outcome)}>{outcomeLabel(e.outcome)}</span></td>
+                  <td className="cell-undo">
+                    {e.canUndo && (
+                      <button type="button" className="btn btn-undo" disabled={Boolean(undoing[e.id] && undoing[e.id].pending)} onClick={() => undo(e)}>
+                        <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 4L3 8l4 4"/><path d="M3 8h8a5 5 0 010 10H8"/></svg>
+                        {undoing[e.id] && undoing[e.id].pending ? 'Removing…' : 'Undo'}
+                      </button>
+                    )}
                     {undoing[e.id] && undoing[e.id].error && <p className="field-error" role="alert">Not removed: {undoing[e.id].error}</p>}
                   </td>
                 </tr>
@@ -192,7 +215,6 @@ export default function CallDeskPage() {
           </table>
         </div>
       )}
-      <p className="hint">Made a mistake? Use Undo on the call above (today only). Undo removes the call from your count but keeps a record of it; it does not change the lead's status. The <Link to="/daily-report">Daily Report</Link> is only needed for days you did not use the Call desk.</p>
     </>
   );
 }

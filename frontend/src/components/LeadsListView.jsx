@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api } from '../api/client.js';
-import { todayValue, formatDate } from '../lib/format.js';
+import { todayValue } from '../lib/format.js';
+import FollowUp from './FollowUp.jsx';
 import { changeStatus, statusOptions, withNewStatus } from '../lib/lead-status.js';
 
 const EMPTY = { q: '', statusId: '', followUp: '', followUpFrom: '', followUpTo: '', bdeId: '' };
 const PAGE_SIZE = 25;
-const BADGE = { overdue: ['badge-overdue', 'Overdue'], today: ['badge-today', 'Due today'], upcoming: ['badge-upcoming', 'Upcoming'] };
 
 function buildQuery(applied, page, today) {
   const p = new URLSearchParams();
@@ -106,8 +106,8 @@ export default function LeadsListView({ mode }) {
         </div>
       )}
 
-      <form className="filters" onSubmit={applyFilters}>
-        <div className="field">
+      <form className="filters filters-bar" onSubmit={applyFilters}>
+        <div className="field field-search">
           <label htmlFor="f-q">Search</label>
           <input id="f-q" type="search" value={form.q} onChange={set('q')} placeholder="Name, phone, email or course" maxLength={100} />
         </div>
@@ -152,7 +152,7 @@ export default function LeadsListView({ mode }) {
         {filterError && <p className="field-error" id="f-error">{filterError}</p>}
       </form>
 
-      <div className="table-wrap">
+      <div className="table-wrap leads-table">
         {list.state === 'loading' && <p className="state-message">Loading leads…</p>}
         {list.state === 'error' && <p className="state-message">{list.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
         {list.state === 'ready' && data.leads.length === 0 && (
@@ -162,7 +162,7 @@ export default function LeadsListView({ mode }) {
           <table className="table-stack" role="table">
             <thead role="rowgroup">
               <tr role="row">
-                <th role="columnheader">Candidate</th><th role="columnheader">Contact</th><th role="columnheader">Course / internship</th><th role="columnheader">Status</th><th role="columnheader">Follow-up</th><th role="columnheader">Next action</th>
+                <th role="columnheader">Candidate</th><th role="columnheader">Course / internship</th><th role="columnheader">Status</th><th role="columnheader">Follow-up</th><th role="columnheader">Next action</th>
                 {admin && <th role="columnheader">BDE</th>}
                 {!admin && <th role="columnheader"><span className="sr-only">Actions</span></th>}
               </tr>
@@ -170,8 +170,7 @@ export default function LeadsListView({ mode }) {
             <tbody role="rowgroup">
               {data.leads.map((l) => (
                 <tr key={l.id} role="row">
-                  <td role="cell" data-label="Candidate">{l.candidateName}</td>
-                  <td role="cell" data-label="Contact">{l.phone && <div>{l.phone}</div>}{l.email && <div className="muted">{l.email}</div>}</td>
+                  <td role="cell" data-label="Candidate">{l.candidateName}{l.phone && <div className="contact-line">{l.phone}</div>}{l.email && <div className="contact-line">{l.email}</div>}</td>
                   <td role="cell" data-label="Course / internship">{l.courseOrInternship}</td>
                   <td role="cell" data-label="Status">
                     {admin ? l.status.name : (
@@ -188,13 +187,10 @@ export default function LeadsListView({ mode }) {
                       )
                     )}
                   </td>
-                  <td role="cell" data-label="Follow-up">
-                    {l.followUpDate ? formatDate(l.followUpDate) : <span className="muted">—</span>}
-                    {l.followUpState && BADGE[l.followUpState] && <span className={'badge ' + BADGE[l.followUpState][0]}>{BADGE[l.followUpState][1]}</span>}
-                  </td>
-                  <td role="cell" data-label="Next action" className="clip" title={l.nextAction || ''}>{l.nextAction || <span className="muted">—</span>}</td>
+                  <td role="cell" data-label="Follow-up"><FollowUp lead={l} /></td>
+                  <td role="cell" data-label="Next action" title={l.nextAction || ''}>{l.nextAction ? <span className="clip2">{l.nextAction}</span> : <span className="muted">—</span>}</td>
                   {admin && <td role="cell" data-label="BDE">{l.bde.name} <span className="muted">({l.bde.employeeId})</span></td>}
-                  {!admin && <td role="cell" data-label="Actions"><Link to={`/leads/${l.id}/edit`}>Edit</Link> · <Link to={`/interviews/new?leadId=${l.id}`}>Schedule interview</Link> · <Link to={`/payments/new?leadId=${l.id}`}>Add payment</Link></td>}
+                  {!admin && <td role="cell" data-label="Actions"><div className="row-actions"><Link to={`/leads/${l.id}/edit`}>Edit</Link><Link to={`/interviews/new?leadId=${l.id}`}>Schedule interview</Link><Link to={`/payments/new?leadId=${l.id}`}>Add payment</Link></div></td>}
                 </tr>
               ))}
             </tbody>

@@ -9,6 +9,7 @@ import { useStackedTables } from './useStackedTables.js';
 const DRAWER_QUERY = '(max-width: 768px)';
 
 // Menu icons: simple 24x24 outline glyphs, decorative only (the text label next to each one is what screen readers read).
+// Shell look (all in styles.css, section 2): white top bar and light sidebar, each with a 1px border; navy text; teal selected state.
 const ICONS = {
   dashboard: <><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></>,
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
@@ -26,7 +27,7 @@ const ICONS = {
   menu: <path d="M4 6h16M4 12h16M4 18h16" />
 };
 function Icon({ name, className }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{ICONS[name]}</svg>;
+  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{ICONS[name]}</svg>;
 }
 
 // Initials for the round avatar in the top bar (decorative: the full name is next to it, or in the label on small screens).
