@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api, uploadReceipt, receiptUrl } from '../api/client.js';
+import PageHeader from './PageHeader.jsx';
 import { validateInstalment } from '../lib/validate-payment.js';
 import { todayValue, formatDate, displayMoney } from '../lib/format.js';
 import { PAYMENT_STATUS_LABEL, PAYMENT_STATUS_BADGE, MAX_RECEIPT_TYPES_TEXT, reviewLabel, reviewBadge, checkReviewNote } from '../lib/payment-labels.js';
@@ -37,24 +38,29 @@ function ReceiptReview({ receipt, admin, onChanged }) {
 
   const by = receipt.reviewedBy ? ` by ${receipt.reviewedBy.name} (${receipt.reviewedBy.employeeId})` : '';
   return (
-    <div>
-      <span className={'badge ' + reviewBadge(receipt.reviewStatus)}>{reviewLabel(receipt.reviewStatus)}</span>
-      {receipt.reviewStatus !== 'pending' && <span className="muted"> {by}</span>}
-      {receipt.reviewNote && <p className="muted">Note: {receipt.reviewNote}</p>}
-      {receipt.reviewStatus === 'rejected' && !admin && <p className="muted">Please upload a corrected proof.</p>}
+    <div className="proof-review">
+      <div className="proof-review-status">
+        <span className="proof-review-label">Proof review</span>
+        <span className={'badge ' + reviewBadge(receipt.reviewStatus)}>{reviewLabel(receipt.reviewStatus)}</span>
+        {receipt.reviewStatus !== 'pending' && <span className="muted">{by}</span>}
+      </div>
+      {receipt.reviewNote && <p className="muted proof-note">Note: {receipt.reviewNote}</p>}
+      {receipt.reviewStatus === 'rejected' && !admin && <p className="muted proof-note">Please upload a corrected proof.</p>}
       {admin && (
-        <div>
+        <div className="proof-actions">
           {!rejecting ? (
             <>
-              {receipt.reviewStatus !== 'approved' && <button type="button" className="btn btn-secondary" onClick={() => decide('approved')} disabled={busy}>Approve</button>}{' '}
+              {receipt.reviewStatus !== 'approved' && <button type="button" className="btn btn-secondary" onClick={() => decide('approved')} disabled={busy}>Approve</button>}
               {receipt.reviewStatus !== 'rejected' && <button type="button" className="btn btn-secondary" onClick={() => { setRejecting(true); setError(''); }} disabled={busy}>Reject…</button>}
             </>
           ) : (
-            <div className="field">
+            <div className="field proof-reject">
               <label htmlFor={'rev-' + receipt.id}>Reason for rejecting (shown to the BDE)</label>
               <input id={'rev-' + receipt.id} type="text" maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} />
-              <button type="button" className="btn btn-primary" onClick={() => decide('rejected')} disabled={busy}>{busy ? 'Saving…' : 'Confirm rejection'}</button>{' '}
-              <button type="button" className="btn btn-secondary" onClick={() => { setRejecting(false); setNote(''); setError(''); }} disabled={busy}>Cancel</button>
+              <div className="proof-actions">
+                <button type="button" className="btn btn-primary" onClick={() => decide('rejected')} disabled={busy}>{busy ? 'Saving…' : 'Confirm rejection'}</button>
+                <button type="button" className="btn btn-secondary" onClick={() => { setRejecting(false); setNote(''); setError(''); }} disabled={busy}>Cancel</button>
+              </div>
             </div>
           )}
           {error && <p className="field-error" role="alert">{error}</p>}
@@ -123,24 +129,29 @@ function InstalmentRow({ inst, admin, rules, onChanged }) {
           </div>
         ) : displayMoney(inst.amount)}
       </td>
-      <td>
+      <td className="proof-cell">
         {inst.receipts.length === 0 && <span className="muted">No proof yet</span>}
         {inst.receipts.length > 0 && (
           <ul className="receipt-list">
             {inst.receipts.map((r) => (
-              <li key={r.id}>
-                <a href={receiptUrl(r.id, admin)} target="_blank" rel="noopener noreferrer">{r.originalName}</a>{' '}
-                <span className="muted">({typeText(r.mimeType)}, {sizeText(r.sizeBytes)})</span>
+              <li key={r.id} className="proof-item">
+                <div className="proof-file">
+                  <a href={receiptUrl(r.id, admin)} target="_blank" rel="noopener noreferrer">{r.originalName}</a>{' '}
+                  <span className="muted">({typeText(r.mimeType)}, {sizeText(r.sizeBytes)})</span>
+                </div>
                 <ReceiptReview receipt={r} admin={admin} onChanged={onChanged} />
               </li>
             ))}
           </ul>
         )}
         {!admin && !editing && inst.receipts.length < rules.maxPerInstalment && (
-          <div className="field">
-            <label htmlFor={fid + '-file'} className="muted">Attach receipt or screenshot ({MAX_RECEIPT_TYPES_TEXT}, up to {sizeText(rules.maxBytes)})</label>
-            <input key={fileKey} id={fid + '-file'} type="file" accept={rules.allowedTypes.join(',')} onChange={(e) => { setFile(e.target.files[0] || null); setUploadError(''); setDupFile(''); }} />
-            <button type="button" className="btn btn-secondary" onClick={() => send(false)} disabled={uploading || !file}>{uploading ? 'Uploading…' : 'Upload'}</button>
+          <div className="field proof-upload">
+            <label htmlFor={fid + '-file'}>Upload proof</label>
+            <p className="hint-inline" id={fid + '-file-hint'}>{MAX_RECEIPT_TYPES_TEXT}, up to {sizeText(rules.maxBytes)}</p>
+            <div className="proof-upload-row">
+              <input key={fileKey} id={fid + '-file'} type="file" accept={rules.allowedTypes.join(',')} aria-describedby={fid + '-file-hint'} onChange={(e) => { setFile(e.target.files[0] || null); setUploadError(''); setDupFile(''); }} />
+              <button type="button" className="btn btn-secondary" onClick={() => send(false)} disabled={uploading || !file}>{uploading ? 'Uploading…' : 'Upload proof'}</button>
+            </div>
             {uploadError && <p className="field-error" role="alert">{uploadError}</p>}
             {dupFile && (
               <div className="alert alert-warning" role="alert">
@@ -214,7 +225,7 @@ export default function PaymentDetailView({ mode }) {
 
   const listPath = admin ? '/admin/payments' : '/payments';
   const back = <p><Link to={listPath}>Back to payments</Link></p>;
-  if (state.status === 'loading') return <>{back}<p className="state-message">Loading…</p></>;
+  if (state.status === 'loading') return <>{back}<p className="state-message" role="status">Loading…</p></>;
   if (state.status === 'error') return <>{back}<div className="alert alert-error" role="alert"><strong>{state.code === 'NOT_FOUND' ? 'Payment not found.' : 'Could not load this payment.'}</strong> {state.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></div></>;
 
   const p = state.payment;
@@ -222,18 +233,19 @@ export default function PaymentDetailView({ mode }) {
   return (
     <>
       {back}
-      <div className="page-head">
-        <h1>{p.lead.candidateName}</h1>
-        {!admin && <Link className="btn btn-secondary btn-as-link" to={`/payments/${p.id}/edit`}>Edit payment</Link>}
-      </div>
+      <PageHeader title={p.lead.candidateName} actions={!admin ? <Link className="btn btn-secondary btn-as-link" to={`/payments/${p.id}/edit`}>Edit payment</Link> : null} />
       {flash && <div className="alert alert-success" role="status"><strong>{flash}</strong> <button type="button" className="btn-link" onClick={() => setFlash('')}>Dismiss</button></div>}
 
-      <div className="card">
-        <p><span className={'badge ' + PAYMENT_STATUS_BADGE[p.status]}>{PAYMENT_STATUS_LABEL[p.status]}</span> {p.courseOrInternship}</p>
-        {(p.lead.phone || p.lead.email) && <p className="muted">{[p.lead.phone, p.lead.email].filter(Boolean).join(' · ')}</p>}
-        {admin && <p>Responsible BDE: <strong>{p.bde.name}</strong> <span className="muted">({p.bde.employeeId})</span></p>}
-        <div className="totals-grid">
-          <div className="total-card"><span className="n">{displayMoney(p.amountCommitted)}</span><span className="l">Committed on {formatDate(p.commitmentDate)}</span></div>
+      <div className="card detail-summary">
+        <dl className="detail-facts">
+          <div><dt>Payment status</dt><dd><span className={'badge ' + PAYMENT_STATUS_BADGE[p.status]}>{PAYMENT_STATUS_LABEL[p.status]}</span></dd></div>
+          <div><dt>Course / internship</dt><dd>{p.courseOrInternship}</dd></div>
+          <div><dt>Committed on</dt><dd>{formatDate(p.commitmentDate)}</dd></div>
+          {(p.lead.phone || p.lead.email) && <div><dt>Contact</dt><dd>{[p.lead.phone, p.lead.email].filter(Boolean).join(' · ')}</dd></div>}
+          {admin && <div><dt>Responsible BDE</dt><dd>{p.bde.name} <span className="muted">({p.bde.employeeId})</span></dd></div>}
+        </dl>
+        <div className="pay-summary">
+          <div className="total-card"><span className="n">{displayMoney(p.amountCommitted)}</span><span className="l">Committed</span></div>
           <div className="total-card"><span className="n">{displayMoney(p.amountPaid)}</span><span className="l">Received</span></div>
           <div className="total-card"><span className="n">{displayMoney(p.amountOutstanding)}</span><span className="l">Outstanding</span></div>
         </div>
@@ -241,10 +253,11 @@ export default function PaymentDetailView({ mode }) {
 
       <div className="card">
         <h2>Instalments received</h2>
+        <p className="hint">Proof review does not change the amounts received or the payment status.</p>
         {p.instalments.length === 0 ? <p className="state-message">Nothing received yet.</p> : (
-          <div className="table-wrap">
+          <div className="table-wrap instalments-table">
             <table>
-              <thead><tr><th>Payment date</th><th className="num">Amount</th><th>Proof (receipt or screenshot)</th>{!admin && <th><span className="sr-only">Actions</span></th>}</tr></thead>
+              <thead><tr><th>Payment date</th><th className="num">Amount</th><th>Proof and review</th>{!admin && <th><span className="sr-only">Actions</span></th>}</tr></thead>
               <tbody>
                 {p.instalments.map((i) => <InstalmentRow key={i.id + ':' + i.amount + ':' + i.paidOn + ':' + i.receipts.length + ':' + i.receipts.map((r) => r.reviewStatus).join('')} inst={i} admin={admin} rules={p.receiptRules} onChanged={changed} />)}
               </tbody>

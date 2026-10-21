@@ -1290,3 +1290,65 @@ td > .badge:first-child { margin-left: 0; }
 
 /* Chat tabs sit after the chat rules above so the touch size is not overridden by them */
 @media (pointer: coarse) { .chat-view-btn { min-height: 44px; } }
+
+/* ---------- Payments and Interviews (v2) ----------
+   Scoped modifiers only: .filters, .filter-actions, .summary-button, .badge-*, .totals-grid, .table-wrap and .receipt-list are shared and are NOT
+   changed. These pages add .filters-bar (defined above), .pay-summary, .filters-more, .payments-table, .interviews-table and the .proof-* classes.
+   Placed after the shared responsive blocks on purpose. Tokens only: no new colours, no gradients, no shadows. */
+
+/* Three compact figures (payment list, payment detail) */
+.pay-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); margin: 0 0 var(--space-3); padding: 0; }
+.pay-summary .total-card { padding: var(--space-2) var(--space-3); }
+.pay-summary .total-card .n { font-size: var(--text-lg); }
+.pay-summary .total-card .l { overflow-wrap: anywhere; }
+.detail-summary .pay-summary { margin: var(--space-3) 0 0; }
+.detail-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3) var(--space-4); margin: 0; }
+.detail-facts > div { min-width: 0; }
+.detail-facts dt { font-size: 0.8125rem; font-weight: 500; color: var(--muted); }
+.detail-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+/* Filter bar extras */
+.filters-bar .field-check { flex: 0 1 auto; display: flex; align-items: center; min-height: var(--control-height); }
+.filters-bar .field-check .check-row { margin: 0; }
+.filters-more { flex: 1 1 100%; min-width: 0; }
+.filters-more > summary { display: inline-block; padding: var(--space-1) 0; font-size: var(--text-sm); font-weight: 600; color: var(--text); cursor: pointer; }
+.filters-more[open] > summary { margin-bottom: var(--space-2); }
+.filters-more-grid { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); }
+.filters-more-grid .field { flex: 1 1 160px; min-width: 0; margin: 0; }
+.how-counted { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--muted); }
+.how-counted > summary { display: inline-block; font-weight: 600; color: var(--text); cursor: pointer; }
+.how-counted p { margin: var(--space-2) 0 0; max-width: 75ch; }
+
+/* Tables: one candidate cell (name, course, contact); the shared card layout takes over on tablets and phones */
+.table-wrap.payments-table table.table-wide, .table-wrap.interviews-table table.table-wide { min-width: 0; }
+.payments-table td, .interviews-table td { vertical-align: middle; }
+.cell-name { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.cell-sub { font-size: 0.8125rem; font-weight: 400; overflow-wrap: anywhere; }
+.interviews-table td[data-label="Interview"] > div:first-child { white-space: nowrap; }
+.cell-badge { margin-top: var(--space-1); }
+.cell-badge .badge { margin-left: 0; }
+.payments-table td[data-label="Candidate"], .interviews-table td[data-label="Candidate"] { min-width: 190px; }
+.payments-table td[data-label="Payment status"] { min-width: 120px; }
+.payments-table .row-actions a, .interviews-table .row-actions a { white-space: nowrap; }
+
+/* Payment proof: file, review state and actions are three separate lines inside one cell */
+.proof-cell { min-width: 240px; }
+.proof-cell .receipt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.proof-item { display: grid; gap: var(--space-1); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.proof-item:last-child { padding-bottom: 0; border-bottom: 0; }
+.proof-file { overflow-wrap: anywhere; }
+.proof-review { display: grid; gap: var(--space-1); }
+.proof-review-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.proof-review-label { font-size: 0.8125rem; font-weight: 600; color: var(--muted); }
+.proof-review .badge { margin-left: 0; }
+.proof-note { margin: 0; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.proof-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.proof-actions .field-error { flex-basis: 100%; margin: 0; }
+.proof-reject { margin: 0; }
+.proof-reject input { width: 100%; }
+.proof-upload { margin: 0; }
+.proof-cell > .muted + .proof-upload { margin-top: var(--space-2); }
+.receipt-list + .proof-upload { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.proof-upload .hint-inline { margin: 0 0 var(--space-2); }
+.proof-upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.proof-upload-row input[type="file"] { flex: 1 1 200px; min-width: 0; max-width: 100%; }

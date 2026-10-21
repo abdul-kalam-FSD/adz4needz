@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import InterviewsListView from '../components/InterviewsListView.jsx';
+import PageHeader from '../components/PageHeader.jsx';
+import { SectionHead } from '../components/DashboardParts.jsx';
 
 const COLUMNS = [
   ['scheduled', 'Scheduled'], ['attended', 'Attended'], ['didNotAttend', 'Did not attend'], ['attendancePending', 'Attendance pending'],
@@ -31,7 +33,7 @@ function Overview() {
   const d = state.data;
   return (
     <>
-      <form className="filters" onSubmit={apply}>
+      <form className="filters filters-bar" onSubmit={apply}>
         <div className="field"><label htmlFor="o-from">Interview date from</label><input id="o-from" type="date" value={range.scheduledFrom} onChange={(e) => setRange((r) => ({ ...r, scheduledFrom: e.target.value }))} /></div>
         <div className="field"><label htmlFor="o-to">Interview date to</label><input id="o-to" type="date" value={range.scheduledTo} onChange={(e) => setRange((r) => ({ ...r, scheduledTo: e.target.value }))} aria-invalid={error ? 'true' : undefined} aria-describedby="o-error" /></div>
         <div className="filter-actions">
@@ -41,8 +43,8 @@ function Overview() {
         {error && <p className="field-error" id="o-error">{error}</p>}
       </form>
       <div className="table-wrap">
-        {state.status === 'loading' && <p className="state-message">Loading overview…</p>}
-        {state.status === 'error' && <p className="state-message">{state.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
+        {state.status === 'loading' && <p className="state-message" role="status">Loading overview…</p>}
+        {state.status === 'error' && <p className="state-message" role="alert">{state.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
         {state.status === 'ready' && d.bdes.length === 0 && <p className="state-message">No BDE accounts yet.</p>}
         {state.status === 'ready' && d.bdes.length > 0 && (
           <table>
@@ -63,11 +65,10 @@ function Overview() {
 export default function AdminInterviewsPage() {
   return (
     <>
-      <h1>All Interviews</h1>
-      <p className="hint">Interviews of the whole team, read-only. The responsible BDE is shown for every interview.</p>
-      <h2 className="overview-title">Overview by BDE</h2>
+      <PageHeader title="All Interviews" description="Whole team, read-only. The responsible BDE is shown for every interview." />
+      <SectionHead title="Overview by BDE" />
       <Overview />
-      <h2 className="overview-title">Interview list</h2>
+      <SectionHead title="Interview list" />
       <InterviewsListView mode="admin" />
     </>
   );

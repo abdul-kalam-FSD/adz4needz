@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 import PaymentsListView from '../components/PaymentsListView.jsx';
+import PageHeader from '../components/PageHeader.jsx';
+import { SectionHead } from '../components/DashboardParts.jsx';
 import { displayMoney } from '../lib/format.js';
 
 const COLUMNS = [
@@ -34,7 +36,7 @@ function Overview() {
   const cell = (row, [k, , money]) => <td key={k} className="num">{money ? displayMoney(row[k]) : row[k]}</td>;
   return (
     <>
-      <form className="filters" onSubmit={apply}>
+      <form className="filters filters-bar" onSubmit={apply}>
         <div className="field"><label htmlFor="po-from">From date</label><input id="po-from" type="date" value={range.dateFrom} onChange={(e) => setRange((r) => ({ ...r, dateFrom: e.target.value }))} /></div>
         <div className="field"><label htmlFor="po-to">To date</label><input id="po-to" type="date" value={range.dateTo} onChange={(e) => setRange((r) => ({ ...r, dateTo: e.target.value }))} aria-invalid={error ? 'true' : undefined} aria-describedby="po-error" /></div>
         <div className="filter-actions">
@@ -43,13 +45,16 @@ function Overview() {
         </div>
         {error && <p className="field-error" id="po-error">{error}</p>}
       </form>
-      <p className="hint">
-        <strong>Committed</strong> counts commitments dated in the range. <strong>Received</strong> counts instalments paid in the range (so it can include instalments against earlier commitments).
-        <strong> Outstanding</strong> is committed minus what has been received so far against those commitments. Amounts are as entered by BDEs; proof review does not change them. Each uploaded proof is approved or rejected by an admin on that payment's page.
-      </p>
+      <details className="how-counted">
+        <summary>How these figures are counted</summary>
+        <p>
+          <strong>Committed</strong> counts commitments dated in the range. <strong>Received</strong> counts instalments paid in the range, so it can include instalments against earlier commitments.
+          <strong> Outstanding</strong> is committed minus what has been received so far against those commitments. Amounts are as entered by BDEs. Each uploaded proof is approved or rejected by an admin on that payment's page; proof review does not change the amounts.
+        </p>
+      </details>
       <div className="table-wrap">
-        {state.status === 'loading' && <p className="state-message">Loading overview…</p>}
-        {state.status === 'error' && <p className="state-message">{state.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
+        {state.status === 'loading' && <p className="state-message" role="status">Loading overview…</p>}
+        {state.status === 'error' && <p className="state-message" role="alert">{state.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
         {state.status === 'ready' && d.bdes.length === 0 && <p className="state-message">No BDE accounts yet.</p>}
         {state.status === 'ready' && d.bdes.length > 0 && (
           <table>
@@ -68,11 +73,10 @@ function Overview() {
 export default function AdminPaymentsPage() {
   return (
     <>
-      <h1>All Payments</h1>
-      <p className="hint">Payments of the whole team. Amounts are read-only here. The responsible BDE is shown for every payment; open a payment to view its proof and approve or reject it.</p>
-      <h2 className="overview-title">Overview by BDE</h2>
+      <PageHeader title="All Payments" description="Whole team, amounts read-only. Open a payment to view its proof and approve or reject it." />
+      <SectionHead title="Overview by BDE" />
       <Overview />
-      <h2 className="overview-title">Payment list</h2>
+      <SectionHead title="Payment list" />
       <PaymentsListView mode="admin" />
     </>
   );

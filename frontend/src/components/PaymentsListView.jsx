@@ -61,23 +61,27 @@ export default function PaymentsListView({ mode }) {
       {flash && <div className="alert alert-success" role="status"><strong>{flash}</strong> <button type="button" className="btn-link" onClick={() => setFlash('')}>Dismiss</button></div>}
 
       {totals && (
-        <div className="totals-grid" role="group" aria-label="My payment totals">
-          <div className="total-card"><span className="n">{displayMoney(totals.committed)}</span><span className="l">Committed ({totals.payments} payment{totals.payments === 1 ? '' : 's'})</span></div>
-          <div className="total-card"><span className="n">{displayMoney(totals.received)}</span><span className="l">Received ({totals.instalments} instalment{totals.instalments === 1 ? '' : 's'})</span></div>
-          <div className="total-card"><span className="n">{displayMoney(totals.outstanding)}</span><span className="l">Outstanding on commitments</span></div>
-          <button type="button" className="total-card summary-button" aria-pressed={applied.status === 'pending'} onClick={() => quick('pending')}><span className="n">{totals.pending}</span><span className="l">Pending</span></button>
-          <button type="button" className="total-card summary-button" aria-pressed={applied.status === 'partially_paid'} onClick={() => quick('partially_paid')}><span className="n">{totals.partiallyPaid}</span><span className="l">Partially paid</span></button>
-          <button type="button" className="total-card summary-button" aria-pressed={applied.status === 'paid'} onClick={() => quick('paid')}><span className="n">{totals.paid}</span><span className="l">Paid</span></button>
-        </div>
+        <>
+          <div className="pay-summary" role="group" aria-label="My payment totals">
+            <div className="total-card"><span className="n">{displayMoney(totals.committed)}</span><span className="l">Committed ({totals.payments} payment{totals.payments === 1 ? '' : 's'})</span></div>
+            <div className="total-card"><span className="n">{displayMoney(totals.received)}</span><span className="l">Received ({totals.instalments} instalment{totals.instalments === 1 ? '' : 's'})</span></div>
+            <div className="total-card"><span className="n">{displayMoney(totals.outstanding)}</span><span className="l">Outstanding on commitments</span></div>
+          </div>
+          <div className="followup-summary" role="group" aria-label="Filter by payment status">
+            <button type="button" className="summary-button" aria-pressed={applied.status === 'pending'} onClick={() => quick('pending')}><span className="n">{totals.pending}</span> Pending</button>
+            <button type="button" className="summary-button" aria-pressed={applied.status === 'partially_paid'} onClick={() => quick('partially_paid')}><span className="n">{totals.partiallyPaid}</span> Partially paid</button>
+            <button type="button" className="summary-button" aria-pressed={applied.status === 'paid'} onClick={() => quick('paid')}><span className="n">{totals.paid}</span> Paid</button>
+          </div>
+        </>
       )}
 
-      <form className="filters" onSubmit={applyFilters}>
-        <div className="field">
+      <form className="filters filters-bar" onSubmit={applyFilters}>
+        <div className="field field-search">
           <label htmlFor="p-q">Search</label>
           <input id="p-q" type="search" value={form.q} onChange={set('q')} placeholder="Candidate, phone, email or course" maxLength={100} />
         </div>
         <div className="field">
-          <label htmlFor="p-status">Status</label>
+          <label htmlFor="p-status">Payment status</label>
           <select id="p-status" value={form.status} onChange={set('status')}>
             <option value="">Any</option>
             {Object.entries(PAYMENT_STATUS_LABEL).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
@@ -94,7 +98,7 @@ export default function PaymentsListView({ mode }) {
             </select>
           </div>
         )}
-        <div className="field">
+        <div className="field field-check">
           <label className="check-row" htmlFor="p-proof"><input id="p-proof" type="checkbox" checked={form.missingProof === 'yes'} onChange={set('missingProof')} /> Instalment without proof</label>
         </div>
         <div className="filter-actions">
@@ -104,9 +108,9 @@ export default function PaymentsListView({ mode }) {
         {filterError && <p className="field-error" id="p-error">{filterError}</p>}
       </form>
 
-      <div className="table-wrap">
-        {list.state === 'loading' && <p className="state-message">Loading payments…</p>}
-        {list.state === 'error' && <p className="state-message">{list.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
+      <div className="table-wrap payments-table">
+        {list.state === 'loading' && <p className="state-message" role="status">Loading payments…</p>}
+        {list.state === 'error' && <p className="state-message" role="alert">{list.message} <button type="button" className="btn btn-secondary" onClick={load}>Retry</button></p>}
         {list.state === 'ready' && data.payments.length === 0 && (
           <p className="state-message">{filtered ? 'No payments match these filters.' : admin ? 'No payments have been recorded yet.' : 'No payments yet. Use "Add payment" to record the first commitment.'}</p>
         )}
@@ -114,9 +118,9 @@ export default function PaymentsListView({ mode }) {
           <table>
             <thead>
               <tr>
-                <th>Candidate</th><th>Course / internship</th><th>Committed on</th>
+                <th>Candidate</th><th>Committed on</th>
                 <th className="num">Committed</th><th className="num">Received</th><th className="num">Outstanding</th>
-                <th>Status</th><th>Proof</th>
+                <th>Payment status</th><th>Proof</th>
                 {admin && <th>BDE</th>}
                 <th><span className="sr-only">Actions</span></th>
               </tr>
@@ -124,8 +128,11 @@ export default function PaymentsListView({ mode }) {
             <tbody>
               {data.payments.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.lead.candidateName}{(p.lead.phone || p.lead.email) && <div className="muted">{p.lead.phone || p.lead.email}</div>}</td>
-                  <td>{p.courseOrInternship}</td>
+                  <td>
+                    <span className="cell-name">{p.lead.candidateName}</span>
+                    <div className="cell-sub">{p.courseOrInternship}</div>
+                    {(p.lead.phone || p.lead.email) && <div className="contact-line">{p.lead.phone || p.lead.email}</div>}
+                  </td>
                   <td>{formatDate(p.commitmentDate)}</td>
                   <td className="num">{displayMoney(p.amountCommitted)}</td>
                   <td className="num">{displayMoney(p.amountPaid)}</td>
@@ -133,7 +140,7 @@ export default function PaymentsListView({ mode }) {
                   <td><span className={'badge ' + PAYMENT_STATUS_BADGE[p.status]}>{PAYMENT_STATUS_LABEL[p.status]}</span></td>
                   <td>{p.instalmentCount === 0 ? <span className="muted">—</span> : `${p.receiptCount} file${p.receiptCount === 1 ? '' : 's'} / ${p.instalmentCount} instalment${p.instalmentCount === 1 ? '' : 's'}`}</td>
                   {admin && <td>{p.bde.name} <span className="muted">({p.bde.employeeId})</span></td>}
-                  <td><Link to={base + p.id}>{admin ? 'View' : 'Open'}</Link></td>
+                  <td><div className="row-actions"><Link to={base + p.id} aria-label={`${admin ? 'View' : 'Open'} payment for ${p.lead.candidateName}`}>{admin ? 'View' : 'Open'}</Link></div></td>
                 </tr>
               ))}
             </tbody>
