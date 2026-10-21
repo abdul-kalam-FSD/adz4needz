@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, monthlyExportUrl } from '../api/client.js';
 import MonthPicker from '../components/MonthPicker.jsx';
-import { FigureCards, TargetTable } from '../components/MonthlyFigures.jsx';
+import { FigureCards, TargetTable, BdeComparison } from '../components/MonthlyFigures.jsx';
+import PageHeader from '../components/PageHeader.jsx';
+import { SectionHead } from '../components/DashboardParts.jsx';
 import { currentMonth, formatAmount, targetInput } from '../lib/report-format.js';
 import RangeReport from '../components/RangeReport.jsx';
 
@@ -31,6 +33,7 @@ function MonthlyView() {
     }
   }, [month]);
   useEffect(() => { load(); setEditing(null); setSaved(''); }, [load]);
+  useEffect(() => { if (editing) document.getElementById('t-calls')?.focus(); }, [editing]);
 
   function startEdit(b) {
     setEditing(b); setSaveError(''); setFormErrors({}); setSaved('');
@@ -70,30 +73,34 @@ function MonthlyView() {
 
   return (
     <>
-      <h1>Monthly Report</h1>
-      <p className="hint">Figures come from the database. Calls come from the Call desk and from manual daily reports, one source per BDE per day (a day with Call desk calls ignores that day's manual report). Interested = interested leads; conversion = interested leads ÷ calls. Percentages marked "achieved" are calculated as actual ÷ target. Leave a target blank for no target.</p>
-      <MonthPicker month={month} onChange={setMonth} disabled={state.loading} />
-      <p>
-        <a className="btn btn-secondary" href={monthlyExportUrl(month, 'xlsx')}>Download Excel</a>{' '}
-        <a className="btn btn-secondary" href={monthlyExportUrl(month, 'pdf')}>Download PDF</a>
-      </p>
+      <details className="how-counted">
+        <summary>How these figures are counted</summary>
+        <p>Figures come from the database. Calls come from the Call desk and from manual daily reports, one source per BDE per day (a day with Call desk calls ignores that day's manual report). Interested = interested leads; conversion = interested leads ÷ calls. Percentages marked "achieved" are calculated as actual ÷ target. Leave a target blank for no target.</p>
+      </details>
+      <div className="report-controls">
+        <MonthPicker month={month} onChange={setMonth} disabled={state.loading} />
+        <div className="download-row">
+          <a className="btn btn-secondary" href={monthlyExportUrl(month, 'xlsx')}>Download Excel</a>
+          <a className="btn btn-secondary" href={monthlyExportUrl(month, 'pdf')}>Download PDF</a>
+        </div>
+      </div>
       {state.error && <div className="alert alert-error" role="alert"><p>{state.error}</p><button type="button" className="btn btn-secondary" onClick={load}>Try again</button></div>}
-      {state.loading && <p role="status">Loading the report…</p>}
+      {state.loading && <p className="state-message" role="status">Loading the report…</p>}
       {saved && <div className="alert alert-success" role="status"><p>{saved}</p></div>}
       {r && !state.loading && (
         <>
-          <h2>{r.label}: whole team</h2>
-          {r.bdes.length === 0 ? <p>No BDEs or activity found for this month.</p> : <FigureCards block={r.total} />}
+          <SectionHead title={`${r.label}: whole team`} />
+          {r.bdes.length === 0 ? <p className="state-message">No BDEs or activity found for this month.</p> : <FigureCards block={r.total} />}
           {r.bdes.length > 0 && (
             <>
-              <h2>Targets and achievement</h2>
+              <SectionHead title="Targets and achievement" />
               {r.total.bdesWithTargets === 0 && <p className="hint">No targets are set for this month yet. Use "Set targets" on a BDE row.</p>}
               <TargetTable rows={r.bdes} renderAction={(b) => <button type="button" className="btn btn-secondary" onClick={() => startEdit(b)}>Set targets</button>} />
               <p className="hint">Team target is the sum of the targets that were set ({r.total.bdesWithTargets} of {r.bdes.length} BDEs). Team revenue received: {formatAmount(r.total.figures.revenueReceived)}.</p>
             </>
           )}
           {editing && (
-            <form onSubmit={handleSave} noValidate aria-label={`Targets for ${editing.name}`}>
+            <form className="card target-form" onSubmit={handleSave} noValidate aria-label={`Targets for ${editing.name}`}>
               <h3>Targets for {editing.name} — {r.label}</h3>
               <div className="toolbar">
                 {field('calls', 'Calls target (optional)')}
@@ -108,13 +115,8 @@ function MonthlyView() {
           )}
           {r.bdes.length > 0 && (
             <>
-              <h2>Per BDE figures</h2>
-              {r.bdes.map((b) => (
-                <section key={b.id} aria-label={b.name}>
-                  <h3>{b.name} ({b.employeeId})</h3>
-                  <FigureCards block={b} />
-                </section>
-              ))}
+              <SectionHead title="Per BDE figures" />
+              <BdeComparison bdes={r.bdes} />
             </>
           )}
         </>
@@ -128,11 +130,12 @@ export default function AdminReportsPage() {
   const [kind, setKind] = useState('monthly');
   return (
     <>
-      <div className="toolbar" role="group" aria-label="Report type">
-        <button type="button" className={'btn ' + (kind === 'monthly' ? 'btn-primary' : 'btn-secondary')} aria-pressed={kind === 'monthly'} onClick={() => setKind('monthly')}>Monthly with targets</button>
-        <button type="button" className={'btn ' + (kind !== 'monthly' ? 'btn-primary' : 'btn-secondary')} aria-pressed={kind !== 'monthly'} onClick={() => setKind(kind === 'monthly' ? 'day' : kind)}>Day / Week / Custom</button>
+      <PageHeader title="Reports" description="Team figures from the database. Choose a report type, then a period." />
+      <div className="report-tabs" role="group" aria-label="Report type">
+        <button type="button" className={'tab-btn' + (kind === 'monthly' ? ' is-active' : '')} aria-pressed={kind === 'monthly'} onClick={() => setKind('monthly')}>Monthly with targets</button>
+        <button type="button" className={'tab-btn' + (kind !== 'monthly' ? ' is-active' : '')} aria-pressed={kind !== 'monthly'} onClick={() => setKind(kind === 'monthly' ? 'day' : kind)}>Day / Week / Custom</button>
       </div>
-      {kind === 'monthly' ? <MonthlyView /> : (<><h1>Report</h1><RangeReport kind={kind} onKind={setKind} /></>)}
+      {kind === 'monthly' ? <MonthlyView /> : <RangeReport kind={kind} onKind={setKind} />}
     </>
   );
 }

@@ -1352,3 +1352,63 @@ td > .badge:first-child { margin-left: 0; }
 .proof-upload .hint-inline { margin: 0 0 var(--space-2); }
 .proof-upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .proof-upload-row input[type="file"] { flex: 1 1 200px; min-width: 0; max-width: 100%; }
+
+/* ---------- Daily Report, Reports and My Month (v2) ----------
+   Scoped modifiers only: .toolbar, .report-form, .card, .stat-*, .summary-cards, .progress*, .kpi*, .table-wrap and the badge rules are shared and
+   are NOT changed. This section adds the report controls (.report-tabs, .seg, .report-controls, .month-bar), the figure list (.fig-*),
+   the target table and cards (.tgt-*, .target-table), the per-BDE comparison (.cmp-table, .bde-detail), the Daily Report form (.daily-*)
+   and its history table. Placed after the shared responsive blocks on purpose. Tokens only: no new colours, no gradients, no shadows. */
+
+/* Report type (level 1, tabs) and period (level 2, segmented control): same buttons and state as before, restyled */
+.report-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: 0 0 var(--space-3); border-bottom: 1px solid var(--border); }
+.tab-btn { margin: 0 0 -1px; padding: var(--space-2) var(--space-3); background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }
+.tab-btn:hover { color: var(--ink); }
+.tab-btn.is-active { color: var(--ink); border-bottom-color: var(--primary); }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-control); overflow: hidden; }
+.seg-btn { min-height: var(--control-height); padding: 0 var(--space-3); background: transparent; border: 0; border-right: 1px solid var(--border); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.seg-btn:last-child { border-right: 0; }
+.seg-btn:hover:not(.is-active) { background: var(--purple-50); }
+.seg-btn.is-active { background: var(--primary); color: var(--on-primary); }
+.report-controls { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-3) var(--space-4); margin: 0 0 var(--space-3); }
+.report-controls .month-bar { margin: 0; }
+.download-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.month-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2) var(--space-3); margin: 0 0 var(--space-3); }
+.month-bar .field { margin: 0; min-width: 160px; }
+
+/* Figures: four headline figures (shared .kpi-row) and the other six in one flat list; every note stays */
+.fig-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-3) var(--space-5); margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); }
+.fig-item { min-width: 0; }
+.fig-item dt { color: var(--muted); font-size: var(--text-sm); font-weight: 500; }
+.fig-value { margin: 2px 0 0; color: var(--purple-900); font-size: var(--text-lg); font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fig-note { margin: 2px 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.35; overflow-wrap: anywhere; }
+
+/* Targets: one column per measure with "actual / target" and the achieved percentage under it */
+.tgt-legend { margin: 0 0 var(--space-2); }
+.table-wrap.target-table table.table-wide, .table-wrap.cmp-table table.table-wide, .table-wrap.reports-table table.table-wide { min-width: 0; }
+.target-table td { vertical-align: top; }
+.table-wrap.cmp-table th, .table-wrap.cmp-table table.table-wide th { white-space: normal; }
+.target-table td[data-label="BDE"], .cmp-table td[data-label="BDE"] { min-width: 170px; }
+.target-table td .btn { white-space: nowrap; }
+.tgt-line { font-variant-numeric: tabular-nums; }
+.tgt-line strong { color: var(--ink); }
+.target-table .progress { max-width: 160px; }
+.tgt-cards .kpi-value { display: block; }
+.tgt-of { color: var(--muted); font-size: var(--text-sm); font-weight: 500; }
+.target-form { max-width: none; margin: var(--space-3) 0 var(--space-4); }
+.target-form h3 { margin: 0 0 var(--space-3); }
+
+/* Per BDE: comparison table first, every BDE's complete figures one click away */
+.bde-details { display: grid; gap: var(--space-2); margin: var(--space-3) 0 var(--space-4); }
+.bde-detail { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); }
+.bde-detail > summary { padding: var(--space-2) var(--space-4); font-weight: 600; color: var(--ink); cursor: pointer; }
+.bde-detail > section { padding: 0 var(--space-4) var(--space-3); }
+.bde-detail .kpi-row { margin-bottom: var(--space-3); }
+.bde-detail .fig-list { margin-bottom: 0; }
+
+/* Daily Report: the form and the history share one width; the five counts sit in a grid */
+.report-form.daily-form { max-width: 900px; }
+.daily-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3) var(--space-4); }
+.daily-grid .field { margin: 0; }
+.daily-grid .daily-hint { grid-column: 1 / -1; margin: 0; }
+.daily-history .hint { margin: 0 0 var(--space-2); }
+.page-header-desc a { color: var(--text); text-decoration: underline; }

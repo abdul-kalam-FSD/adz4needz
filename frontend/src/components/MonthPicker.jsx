@@ -2,7 +2,7 @@ import { MONTH_RE, shiftMonth } from '../lib/report-format.js';
 
 export default function MonthPicker({ month, onChange, disabled }) {
   return (
-    <div className="toolbar">
+    <div className="month-bar" role="group" aria-label="Choose month">
       <button type="button" className="btn btn-secondary" disabled={disabled} onClick={() => onChange(shiftMonth(month, -1))}>Previous month</button>
       <div className="field">
         <label htmlFor="report-month">Month</label>
